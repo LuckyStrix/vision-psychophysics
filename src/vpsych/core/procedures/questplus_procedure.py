@@ -1,20 +1,52 @@
 """QUEST+ adaptive procedure, wrapping the `questplus` package.
 
 Implements :class:`vpsych.core.procedures.base.AdaptiveProcedure` for a
-single-parameter (threshold) QUEST+ run. QUEST+ (Watson 2017) generalizes
-QUEST to arbitrary psychometric-function families and stimulus/response
-spaces by maintaining a full posterior over parameters and selecting each
-next stimulus to maximize expected information gain.
+single-parameter (threshold) QUEST+ run. QUEST+ (Watson, A. B. (2017). QUEST+:
+A general multidimensional Bayesian adaptive psychometric method. Journal of
+Vision, 17(3):10) generalizes QUEST to arbitrary psychometric-function
+families and stimulus/response spaces by maintaining a full posterior over
+parameters and selecting each next stimulus to maximize expected information
+gain (minimize expected posterior entropy).
 
-Not implemented in Phase 0 -- this module freezes the constructor signature
-and documents intended behavior; `next_intensity`/`update`/`estimate` raise
-`NotImplementedError` until a later phase implements them against
-`questplus.QuestPlus`.
+Mapping onto the `questplus` package
+-------------------------------------
+`questplus.QuestPlus` ships a fixed set of built-in psychometric-function
+families: `"weibull"`, `"csf"`, `"norm_cdf"`, `"norm_cdf_2"`,
+`"thurstone_scaling"` -- notably, no `"logistic"`. This wrapper therefore
+supports `function="weibull"` and `function="norm_cdf"`; `function="logistic"`
+raises `ValueError` at construction (use `ConstantStimuli` or
+`WeightedStaircase` instead, whose threshold estimation goes through
+`vpsych.core.psychometric.fit_mle`, which *does* support all three families).
+
+- `function="weibull"`: maps directly onto `questplus`'s `"weibull"` func,
+  whose `threshold`/`slope`/`lapse_rate` parameter names match this
+  project's `threshold_values`/`slope_values`/`lapse_rate_values`. The guess
+  rate is fixed (not searched) by passing it as a singleton
+  `lower_asymptote` parameter-domain entry (`[guess_rate]`) -- `questplus`
+  has no separate "fixed nuisance parameter" concept, so a size-1 grid
+  dimension is the standard way to pin a parameter's value while still
+  letting it appear in every likelihood evaluation.
+- `function="norm_cdf"`: maps onto `questplus`'s `"norm_cdf"` func, whose
+  parameters are named `mean`/`sd` rather than `threshold`/`slope` (mapped
+  here) and which only supports `stim_scale="linear"` (it raises otherwise);
+  the `stim_scale` constructor argument is therefore ignored (forced to
+  `"linear"`) when `function="norm_cdf"`.
+
+Not part of the Phase 0 freeze: `stim_scale` (questplus needs an actual
+scale, not just the free-text `intensity_units` label) and
+`param_estimation_method` (`"mean"` or `"mode"`, per the Phase 1a task's
+"posterior mean (or mode, configurable)" requirement) are added as optional
+keyword arguments with defaults (`"log10"`, `"mean"`) preserving
+call-compatibility with the frozen signature.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
+
+import numpy as np
+from questplus import QuestPlus
+from scipy import stats as _stats  # type: ignore[import-untyped]
 
 from vpsych.core.procedures.base import ThresholdEstimate
 
@@ -51,6 +83,13 @@ class QuestPlusProcedure:
             criterion for a settled/precise threshold).
         ci_level: Nominal coverage for `estimate().ci_low`/`ci_high`,
             e.g. `0.95`.
+        stim_scale: Scale `intensity_values` are on: `"log10"`, `"linear"`,
+            or `"dB"`. Not part of the Phase 0 freeze; see module docstring.
+            Forced to `"linear"` when `function="norm_cdf"` regardless of
+            this argument (a `questplus` restriction).
+        param_estimation_method: `"mean"` (default) or `"mode"`; which
+            summary of the posterior `estimate()` reports. Not part of the
+            Phase 0 freeze; see module docstring.
     """
 
     def __init__(
@@ -67,7 +106,28 @@ class QuestPlusProcedure:
         max_trials: int | None = None,
         target_entropy: float | None = None,
         ci_level: float = 0.95,
+        stim_scale: Literal["log10", "linear", "dB"] = "log10",
+        param_estimation_method: Literal["mean", "mode"] = "mean",
     ) -> None:
+        if function == "logistic":
+            raise ValueError(
+                "QuestPlusProcedure does not support function='logistic': the "
+                "questplus package's built-in psychometric functions are "
+                "'weibull', 'csf', 'norm_cdf', 'norm_cdf_2', and "
+                "'thurstone_scaling' (no logistic-CDF option). Use "
+                "function='weibull' or 'norm_cdf', or use ConstantStimuli / "
+                "WeightedStaircase (whose fitting goes through "
+                "vpsych.core.psychometric.fit_mle) for a logistic fit instead."
+            )
+        if function not in ("weibull", "norm_cdf"):
+            raise ValueError(f"Unsupported function: {function!r}")
+        if not intensity_values:
+            raise ValueError("intensity_values must be non-empty")
+        if not threshold_values or not slope_values or not lapse_rate_values:
+            raise ValueError(
+                "threshold_values, slope_values, and lapse_rate_values must be non-empty"
+            )
+
         self.intensity_values = intensity_values
         self.intensity_units = intensity_units
         self.threshold_values = threshold_values
@@ -80,20 +140,113 @@ class QuestPlusProcedure:
         self.max_trials = max_trials
         self.target_entropy = target_entropy
         self.ci_level = ci_level
+        self.stim_scale = stim_scale
+        self.param_estimation_method = param_estimation_method
         self.finished: bool = False
-        raise NotImplementedError(
-            "QuestPlusProcedure is a Phase-0 interface stub; implementation "
-            "lands in a later phase (wraps questplus.QuestPlus)."
+        self._n_trials = 0
+
+        if function == "weibull":
+            self._threshold_key = "threshold"
+            self._slope_key = "slope"
+            qp_func: Literal["weibull", "norm_cdf"] = "weibull"
+            qp_stim_scale: Literal["log10", "linear", "dB"] = self.stim_scale
+            param_domain = {
+                "threshold": threshold_values,
+                "slope": slope_values,
+                "lower_asymptote": [guess_rate],
+                "lapse_rate": lapse_rate_values,
+            }
+        else:  # norm_cdf
+            self._threshold_key = "mean"
+            self._slope_key = "sd"
+            qp_func = "norm_cdf"
+            qp_stim_scale = "linear"
+            param_domain = {
+                "mean": threshold_values,
+                "sd": slope_values,
+                "lower_asymptote": [guess_rate],
+                "lapse_rate": lapse_rate_values,
+            }
+
+        self._qp = QuestPlus(
+            stim_domain={"intensity": intensity_values},
+            param_domain=param_domain,
+            outcome_domain={"response": ["correct", "incorrect"]},
+            func=qp_func,
+            stim_scale=qp_stim_scale,
+            stim_selection_method=stim_selection_method,
+            stim_selection_options=self.stim_selection_options or None,
+            param_estimation_method=param_estimation_method,
         )
 
     def next_intensity(self) -> float:
-        raise NotImplementedError
+        stim = self._qp.next_stim
+        return float(stim["intensity"])
 
     def update(self, intensity: float, correct: bool) -> None:
-        raise NotImplementedError
+        if self.finished:
+            return
+        stim = {"intensity": float(intensity)}
+        outcome = {"response": "correct" if correct else "incorrect"}
+        self._qp.update(stim=stim, outcome=outcome)
+        self._n_trials += 1
+
+        if self.max_trials is not None and self._n_trials >= self.max_trials:
+            self.finished = True
+        if self.target_entropy is not None:
+            _ = self._qp.next_stim  # refreshes self._qp.entropy for the new posterior
+            if np.isfinite(self._qp.entropy) and self._qp.entropy <= self.target_entropy:
+                self.finished = True
 
     def estimate(self) -> ThresholdEstimate:
-        raise NotImplementedError
+        param_est = self._qp.param_estimate
+        threshold = float(param_est[self._threshold_key])
+        slope_est = float(param_est[self._slope_key])
+        lapse_est = float(param_est["lapse_rate"])
+
+        marginal = self._qp.marginal_posterior
+        thr_vals = np.asarray(self._qp.param_domain[self._threshold_key], dtype=float)
+        thr_probs = np.asarray(marginal[self._threshold_key], dtype=float)
+        thr_sd = float(np.sqrt(np.sum(thr_probs * (thr_vals - threshold) ** 2)))
+        z = float(_stats.norm.ppf(0.5 + self.ci_level / 2))
+        ci_low = threshold - z * thr_sd
+        ci_high = threshold + z * thr_sd
+
+        entropy = float(self._qp.entropy)
+        return ThresholdEstimate(
+            value=threshold,
+            ci_low=ci_low,
+            ci_high=ci_high,
+            ci_level=self.ci_level,
+            units=self.intensity_units,
+            method=f"quest_plus_posterior_{self.param_estimation_method}",
+            extra={
+                "slope": slope_est,
+                "lapse_rate": lapse_est,
+                "threshold_posterior_sd": thr_sd,
+                "n_trials": self._n_trials,
+                "posterior_entropy": entropy if np.isfinite(entropy) else None,
+            },
+        )
 
     def state_dict(self) -> dict[str, Any]:
-        raise NotImplementedError
+        marginal = self._qp.marginal_posterior
+        means: dict[str, float] = {}
+        sds: dict[str, float] = {}
+        for name, vals in self._qp.param_domain.items():
+            if name == "lower_asymptote":
+                continue  # fixed (guess_rate), not an estimated parameter
+            vals_arr = np.asarray(vals, dtype=float)
+            probs = np.asarray(marginal[name], dtype=float)
+            mean = float(np.sum(probs * vals_arr))
+            sd = float(np.sqrt(np.sum(probs * (vals_arr - mean) ** 2)))
+            means[name] = mean
+            sds[name] = sd
+        entropy = float(self._qp.entropy)
+        return {
+            "n_trials": self._n_trials,
+            "finished": self.finished,
+            "posterior_mean": means,
+            "posterior_sd": sds,
+            "entropy": entropy if np.isfinite(entropy) else None,
+        }

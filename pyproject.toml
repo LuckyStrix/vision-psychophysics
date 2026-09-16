@@ -117,9 +117,12 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m \"not slow\""
 filterwarnings = [
     "ignore::DeprecationWarning:psychopy.*",
+]
+markers = [
+    "slow: high-repetition scientific validation tests (bias/coverage over hundreds of simulated runs); excluded by default, run with `pytest -m slow` or `pytest -m \"\"`.",
 ]
 
 [tool.coverage.run]
