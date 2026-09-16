@@ -130,8 +130,13 @@ class QCSF(MultiParamProcedure):
     """qCSF adaptive procedure over the truncated log-parabola CSF model.
 
     Stimuli are specified as dicts with keys `"spatial_frequency_cpd"`
-    (cycles per degree of visual angle) and `"contrast"` (Michelson
-    contrast, unitless in [0, 1]).
+    (cycles per degree of visual angle), `"contrast"` (Michelson contrast,
+    unitless in [0, 1]), and `"intensity"` (log10 of `contrast`) -- the
+    latter is the scalar the trial loop logs as the trial's intensity
+    (`TrialRecord.intensity`, `intensity_units="log10_contrast"`) even
+    though qCSF's own stimulus space is 2D; `update()` ignores it and only
+    uses `spatial_frequency_cpd`/`contrast` to locate the presented
+    stimulus on the grid.
 
     Args:
         spatial_frequency_values_cpd: Candidate spatial-frequency levels the
@@ -337,12 +342,26 @@ class QCSF(MultiParamProcedure):
             + pk_incorrect * np.log(pk_incorrect)
         )
         best_idx = int(np.argmin(expected_entropy))
+        contrast = float(self._stim_contrast[best_idx])
         return {
             "spatial_frequency_cpd": float(self._stim_freq[best_idx]),
-            "contrast": float(self._stim_contrast[best_idx]),
+            "contrast": contrast,
+            # log10 contrast, duplicated from `contrast` under the key the
+            # trial loop logs as the trial's scalar intensity (every
+            # procedure's stimulus dict carries an "intensity" field for
+            # `TrialRecord.intensity`/`intensity_units="log10_contrast"`,
+            # even though qCSF's own stimulus space is 2D).
+            "intensity": float(np.log10(contrast)),
         }
 
     def update(self, stimulus: dict[str, float], correct: bool) -> None:
+        """Record a trial's outcome.
+
+        Accepts the full dict `next_stimulus()` returns (including the
+        `"intensity"` key) but only `spatial_frequency_cpd` and `contrast`
+        are used to locate the presented stimulus on the grid; any other
+        keys (e.g. `"intensity"`) are ignored.
+        """
         if self._finished:
             return
         idx = self._nearest_stim_index(stimulus["spatial_frequency_cpd"], stimulus["contrast"])

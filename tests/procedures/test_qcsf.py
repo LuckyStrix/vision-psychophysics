@@ -57,6 +57,20 @@ def test_constructor_rejects_empty_grids() -> None:
         QCSF(**bad, guess_rate=0.5)
 
 
+def test_state_dict_works_before_any_update() -> None:
+    """The trial loop calls state_dict() on every trial, including practice
+    trials before the first update() -- must never raise."""
+    qcsf = _make_qcsf(max_trials=20)
+    state = qcsf.state_dict()
+    json.dumps(state)
+    assert state["n_trials"] == 0
+    assert state["finished"] is False
+    # estimate() legitimately cannot produce AULCSF with zero data -- it
+    # should fail loudly and cleanly (RuntimeError), not crash obscurely.
+    with pytest.raises(RuntimeError, match="before any trials"):
+        qcsf.estimate()
+
+
 def test_finishes_at_max_trials() -> None:
     qcsf = _make_qcsf(max_trials=20)
     obs = _true_observer()
@@ -64,6 +78,22 @@ def test_finishes_at_max_trials() -> None:
     _run(qcsf, obs, rng)
     assert qcsf.finished
     assert qcsf.state_dict()["n_trials"] == 20
+
+
+def test_next_stimulus_includes_intensity_key() -> None:
+    """The trial loop logs `stimulus["intensity"]` for every procedure, so
+    qCSF's 2D stimulus dict must also carry a scalar "intensity" (log10
+    contrast) alongside spatial_frequency_cpd/contrast, and update() must
+    accept that full dict back (ignoring the extra key)."""
+    qcsf = _make_qcsf(max_trials=5)
+    obs = _true_observer()
+    rng = np.random.default_rng(6)
+    stim = qcsf.next_stimulus()
+    assert set(stim.keys()) == {"spatial_frequency_cpd", "contrast", "intensity"}
+    assert stim["intensity"] == pytest.approx(np.log10(stim["contrast"]))
+    resp = obs.respond({**stim, "correct_alternative": 0}, rng)
+    qcsf.update(stim, resp == 0)  # must not raise on the extra "intensity" key
+    assert qcsf.state_dict()["n_trials"] == 1
 
 
 def test_next_stimulus_is_fast() -> None:
