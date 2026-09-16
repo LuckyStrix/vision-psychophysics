@@ -12,32 +12,15 @@ and keyboard (see `vpsych.core.trial_loop.SimulatedBackend`), so end-to-end
 session logic (trial loop, writer, status updates, exit codes) is
 exercisable in CI without a display.
 
-## The session-plan file, `participant_id`, and `calibration_hash`
+## The session-plan file
 
-`vpsych.data.schemas.SessionPlan` (the frozen pydantic model) only carries
-`tests`/`ordering`/`seed` -- it has no `participant_id` or
-`calibration_hash` field, both of which this runner needs (to build
-`SessionInfo` and to select the calibration to check tests against). Since
-that schema is frozen and this runner's CLI contract (`--session-plan`,
-etc.) is also frozen from Phase 0 with no separate flags for these, this
-module treats the `--session-plan` JSON file as a superset of
-`SessionPlan`: it reads the raw JSON first, validates the `SessionPlan`
-fields out of it with `SessionPlan.model_validate` (which silently ignores
-unknown keys, pydantic's default), and separately reads two additional
-top-level keys directly from the raw dict:
-
-- `"participant_id"` (required): the pseudonymous `sub-XXXX` ID this
-  session belongs to.
-- `"calibration_hash"` (optional): the specific calibration to use (see
-  `vpsych.data.paths.calibration_path`). If omitted, the runner picks the
-  most recently created `cal-*.json` file under the data root's
-  `calibration/` directory (see `_most_recent_calibration`).
-
-This is a provisional convention introduced here to close a real gap
-between the frozen `SessionPlan` schema and what a runnable session needs;
-it should be reconciled with however the PySide6 app (Phase 3) and the data
-layer (`vpsych.data`, built concurrently) end up naming/shaping the file
-that's actually written to `--session-plan`.
+`--session-plan` points at a JSON file that validates directly as a
+`vpsych.data.schemas.SessionPlan`, which carries `participant_id` (the
+pseudonymous `sub-XXXX` ID this session belongs to) and an optional
+`calibration_hash` (the specific calibration to use; see
+`vpsych.data.paths.calibration_path`). If `calibration_hash` is omitted,
+the runner picks the most recently created `cal-*.json` file under the data
+root's `calibration/` directory (see `_most_recent_calibration`).
 
 ## The `Writer` protocol
 
@@ -251,46 +234,37 @@ def load_session_plan(
 ) -> tuple[SessionPlan, str, Calibration | None]:
     """Load the session plan, participant ID, and active calibration.
 
-    See the module docstring's "The session-plan file" section for why
-    `participant_id`/`calibration_hash` are read from the raw JSON rather
-    than the `SessionPlan` model itself.
-
     Args:
-        session_plan_path: Path to the `--session-plan` JSON file.
+        session_plan_path: Path to the `--session-plan` JSON file (must
+            validate as `vpsych.data.schemas.SessionPlan`).
         data_root: Data root to resolve `calibration_hash` against.
 
     Returns:
         A `(plan, participant_id, calibration)` tuple. `calibration` is
-        `None` if no `calibration_hash` was given and no calibration file
+        `None` if `plan.calibration_hash` is `None` and no calibration file
         exists under the data root's `calibration/` directory.
 
     Raises:
-        ValueError: If the file has no `"participant_id"` key.
-        FileNotFoundError: If a `calibration_hash` was given but no
+        FileNotFoundError: If `plan.calibration_hash` was given but no
             matching calibration file exists.
     """
     raw = json.loads(session_plan_path.read_text(encoding="utf-8"))
     plan = SessionPlan.model_validate(raw)
 
-    participant_id = raw.get("participant_id")
-    if not participant_id:
-        raise ValueError(
-            f"{session_plan_path} is missing a required top-level 'participant_id' field."
-        )
-
-    cal_hash = raw.get("calibration_hash")
     cal_dir = calibration_dir(data_root)
-    if cal_hash:
-        cal_path = cal_dir / f"cal-{cal_hash}.json"
+    if plan.calibration_hash:
+        cal_path = cal_dir / f"cal-{plan.calibration_hash}.json"
         if not cal_path.exists():
-            raise FileNotFoundError(f"Calibration {cal_hash!r} not found at {cal_path}.")
+            raise FileNotFoundError(
+                f"Calibration {plan.calibration_hash!r} not found at {cal_path}."
+            )
         calibration: Calibration | None = Calibration.model_validate_json(
             cal_path.read_text(encoding="utf-8")
         )
     else:
         calibration = _most_recent_calibration(cal_dir)
 
-    return plan, str(participant_id), calibration
+    return plan, plan.participant_id, calibration
 
 
 def _default_writer_factory(

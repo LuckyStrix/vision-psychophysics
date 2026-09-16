@@ -42,6 +42,7 @@ def main() -> None:
         hdr_disabled=True,
     )
     plan = SessionPlan(
+        participant_id=participant_id,
         tests=[PlannedTest(task_id="dummy_test", eye="OD", params={}, viewing_distance_cm=57.0)],
         ordering="fixed",
         seed=1,

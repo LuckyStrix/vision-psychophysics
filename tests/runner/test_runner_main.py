@@ -3,7 +3,7 @@
 Runs `run_session` end to end against a temporarily registered dummy test,
 an in-memory fake `Writer`, and `--simulate always_correct`, so no display
 or real `SessionWriter`/photometer is needed. Also covers session-plan
-loading (participant_id/calibration_hash conventions -- see the module
+loading (`SessionPlan.participant_id`/`calibration_hash` -- see the module
 docstring in `vpsych.runner.__main__`), requirements-unmet and error exit
 paths, and the SIGINT/SIGTERM abort-signal wiring.
 """
@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from vpsych.core.calibration.models import (
     Calibration,
@@ -277,7 +277,7 @@ def _args(
 def test_load_session_plan_requires_participant_id(tmp_path: Path) -> None:
     plan_path = tmp_path / "plan.json"
     _write_plan(plan_path, participant_id=None)
-    with pytest.raises(ValueError, match="participant_id"):
+    with pytest.raises(ValidationError, match="participant_id"):
         load_session_plan(plan_path, tmp_path)
 
 
