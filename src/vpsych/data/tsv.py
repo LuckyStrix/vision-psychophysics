@@ -84,7 +84,16 @@ def read_trials_tsv(path: str | Path) -> pd.DataFrame:
     for col in _NULLABLE_BOOL_COLUMNS:
         if col in df.columns:
             df[col] = df[col].map(lambda v: None if v == "n/a" else _parse_bool(v))
-            df[col] = df[col].astype("object")
+            # pandas' nullable "boolean" extension dtype, not "object": an
+            # object-dtype column of plain Python True/False/None applies `~`
+            # elementwise as Python's bitwise-invert operator (~True == -2,
+            # ~False == -1), not logical negation -- a landmine for any
+            # summarize() that writes the natural `~trials["correct"]` to get
+            # "incorrect", silently producing nonsense instead of an error
+            # (found via tests/integration/test_end_to_end.py). The nullable
+            # "boolean" dtype supports `~` (and `.mean()`/`.sum()`) correctly,
+            # propagating NA as NA.
+            df[col] = df[col].astype("boolean")
 
     for col in _FLOAT_COLUMNS:
         if col in df.columns:

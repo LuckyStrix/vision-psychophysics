@@ -355,18 +355,32 @@ class PsychophysicalTest(ABC):
 
     @abstractmethod
     def build_stimuli(self, win: Any) -> dict[str, Any]:
-        """Construct and return this test's reusable PsychoPy stimulus objects.
+        """Construct this test's reusable PsychoPy stimulus objects.
 
-        Called once per run, after the PsychoPy window is open. Must import
-        `psychopy` lazily inside this method (or methods it calls), never at
-        module import time, so this module stays importable headless.
+        Called once per run, after the PsychoPy window is open, via
+        `test.build_stimuli(win)` -- note that the caller (see
+        `vpsych.runner.__main__.run_session`) does *not* pass the returned
+        dict on to `present()`; `trial_ctx` has no `"stimuli"` key. A test
+        implementation must therefore store whatever it builds on `self`
+        (e.g. `self._stims = {...}`) for `present()` to reuse across trials.
+        The dict is still returned (rather than `None`) so a caller that
+        *does* want it (e.g. a future interactive preview/demo tool, or a
+        test's own unit tests asserting on what got built) can use it too.
+        Must import `psychopy` lazily inside this method (or methods it
+        calls), never at module import time, so this module stays
+        importable headless.
 
         Args:
-            win: A `psychopy.visual.Window` the stimuli are drawn into.
+            win: A `psychopy.visual.Window` the stimuli are drawn into, or
+                `None` when driven by `vpsych.core.trial_loop.SimulatedBackend`
+                (`PresentationBackend.win` is `None` in that case) -- a test
+                should return `{}` without touching `psychopy` at all in
+                that branch, since there is no window to build stimuli in.
 
         Returns:
-            A dict of named stimulus objects (test-specific keys) reused
-            across trials by `present`.
+            A dict of named stimulus objects (test-specific keys); also
+            expected to be stored on `self` for `present()` to use (see
+            above).
         """
         raise NotImplementedError
 

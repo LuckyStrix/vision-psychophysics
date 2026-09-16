@@ -189,7 +189,7 @@ def test_simulated_end_to_end_recovery_via_runner(tmp_path: Path) -> None:
     observer = parse_simulated_observer_spec(
         f"psychometric:threshold={true_threshold},slope=0.3,lapse=0.02"
     )
-    target = intensity_at_p_correct(observer.true_function, 0.75)  # type: ignore[attr-defined]
+    target = intensity_at_p_correct(observer.true_function, 0.75)
     # Generous tolerance: only 60 trials, and QUEST+ threshold reporting isn't
     # necessarily at the 75%-correct point -- this just checks it's in the
     # right ballpark, not tightly calibrated (see test_questplus_procedure.py

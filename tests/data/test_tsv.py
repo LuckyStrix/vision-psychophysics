@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from vpsych.data.tsv import read_trials_tsv
@@ -56,7 +57,11 @@ def test_round_trip_none_values_become_none(tmp_path: Path) -> None:
     df = read_trials_tsv(path)
     row = df.iloc[0]
     assert row["response"] is None
-    assert row["correct"] is None
+    # "correct" is pandas' nullable "boolean" dtype (not plain "object"), so
+    # its missing-value sentinel is pd.NA, not None -- see read_trials_tsv's
+    # _NULLABLE_BOOL_COLUMNS handling for why (`~` must negate logically, not
+    # bitwise-invert a bare Python bool).
+    assert pd.isna(row["correct"])
     assert row["rt_s"] is None
 
 
