@@ -108,7 +108,7 @@ def test_recovery_slow() -> None:
     rng = np.random.default_rng(3)
     true_aulcsf = _true_aulcsf()
     diffs = []
-    n_reps = 80
+    n_reps = 150
     for _ in range(n_reps):
         qcsf = _make_qcsf(max_trials=100)
         _run(qcsf, obs, rng)

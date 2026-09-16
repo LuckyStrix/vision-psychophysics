@@ -355,13 +355,29 @@ class QCSF(MultiParamProcedure):
         if self.max_trials is not None and self._n_trials >= self.max_trials:
             self._finished = True
 
-    def _aulcsf_grid(self, f_lo: float = 1.0, f_hi: float = 18.0, n_pts: int = 50) -> np.ndarray:
+    def _aulcsf_grid(
+        self,
+        f_lo: float = 1.0,
+        f_hi: float = 18.0,
+        n_pts: int = 50,
+        gain: np.ndarray | None = None,
+        pfreq: np.ndarray | None = None,
+        bw: np.ndarray | None = None,
+        trunc: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """AULCSF for each of `gain`/`pfreq`/`bw`/`trunc` (default: every grid point)."""
+        if gain is None:
+            gain, pfreq, bw, trunc = (
+                self._param_gain,
+                self._param_freq,
+                self._param_bw,
+                self._param_trunc,
+            )
+        assert pfreq is not None and bw is not None and trunc is not None
         log10_f_grid = np.linspace(np.log10(f_lo), np.log10(f_hi), n_pts)
         f_grid = 10.0**log10_f_grid
-        log_cs = self._log_cs_at(
-            f_grid, self._param_gain, self._param_freq, self._param_bw, self._param_trunc
-        )
-        return np.asarray(np.trapezoid(log_cs, x=log10_f_grid, axis=0))  # (n_param,)
+        log_cs = self._log_cs_at(f_grid, gain, pfreq, bw, trunc)
+        return np.asarray(np.trapezoid(log_cs, x=log10_f_grid, axis=0))  # (n_param,) or (1,)
 
     def estimate(self) -> ThresholdEstimate:
         """Return AULCSF (area under the log CSF) with a posterior credible interval.
@@ -369,10 +385,26 @@ class QCSF(MultiParamProcedure):
         AULCSF is `trapz(log10 CS(f), x=log10(f))` integrated over
         `f` in [1, 18] cpd (50 log-spaced points) -- a standard
         log-log-space area, in `log10(CS) * log10(cpd)` units, *not*
-        normalized by the integration range. It is computed exactly (to grid
-        resolution) as the posterior-weighted mean/percentiles of this
-        integral evaluated at every point of the 4-parameter grid (no Monte
-        Carlo sampling needed, since the grid itself is small).
+        normalized by the integration range.
+
+        The point estimate is the "plug-in" AULCSF computed *from the
+        posterior-mean CSF parameters* (below), not the posterior mean of
+        AULCSF evaluated grid-point-by-grid-point. The two differ because
+        AULCSF is a concave function of the parameters (e.g. diminishing
+        returns from `bandwidth`): by Jensen's inequality,
+        `E[AULCSF(params)] <= AULCSF(E[params])` whenever the posterior
+        hasn't yet concentrated, and averaging AULCSF itself was measured to
+        be systematically biased low by as much as ~0.14 log units at the
+        trial counts this project's validation tests use (see
+        `tests/procedures/test_qcsf.py`), only closing as the posterior
+        concentrates over many more trials. The plug-in estimate at the
+        posterior mean avoids this and roughly halved the observed bias in
+        the same simulations, which is also how AULCSF is conventionally
+        reported (from a point CSF fit, not integrated over fit
+        uncertainty). The *credible interval* is still the posterior-
+        weighted percentile of per-grid-point AULCSF values (no Monte Carlo
+        needed, since the grid itself is small) -- a CI legitimately
+        describes spread and isn't subject to the same point-estimate bias.
 
         `extra` holds the posterior mean/SD of all 4 CSF parameters and the
         posterior-mean log10 CS at `STANDARD_FREQUENCIES_CPD`.
@@ -380,17 +412,24 @@ class QCSF(MultiParamProcedure):
         if self._n_trials == 0:
             raise RuntimeError("QCSF.estimate() called before any trials were recorded")
 
-        aulcsf_grid = self._aulcsf_grid()
-        mean_aulcsf = float(np.sum(self._posterior * aulcsf_grid))
-        alpha = 1.0 - self.ci_level
-        ci_low, ci_high = _weighted_percentile(
-            aulcsf_grid, self._posterior, [alpha / 2, 1 - alpha / 2]
-        )
-
         gain_mean, gain_sd = _weighted_mean_sd(self._param_gain, self._posterior)
         freq_mean, freq_sd = _weighted_mean_sd(self._param_freq, self._posterior)
         bw_mean, bw_sd = _weighted_mean_sd(self._param_bw, self._posterior)
         trunc_mean, trunc_sd = _weighted_mean_sd(self._param_trunc, self._posterior)
+
+        point_aulcsf = float(
+            self._aulcsf_grid(
+                gain=np.array([gain_mean]),
+                pfreq=np.array([freq_mean]),
+                bw=np.array([bw_mean]),
+                trunc=np.array([trunc_mean]),
+            )[0]
+        )
+        aulcsf_grid = self._aulcsf_grid()
+        alpha = 1.0 - self.ci_level
+        ci_low, ci_high = _weighted_percentile(
+            aulcsf_grid, self._posterior, [alpha / 2, 1 - alpha / 2]
+        )
 
         std_freqs = np.array(STANDARD_FREQUENCIES_CPD)
         log_cs_grid = self._log_cs_at(
@@ -399,12 +438,12 @@ class QCSF(MultiParamProcedure):
         log_cs_mean = (log_cs_grid * self._posterior[None, :]).sum(axis=1)
 
         return ThresholdEstimate(
-            value=mean_aulcsf,
+            value=point_aulcsf,
             ci_low=float(ci_low),
             ci_high=float(ci_high),
             ci_level=self.ci_level,
             units="aulcsf_log10cs_log10cpd",
-            method="qcsf_posterior_grid_mean",
+            method="qcsf_aulcsf_at_posterior_mean_params",
             extra={
                 "n_trials": self._n_trials,
                 "aulcsf_integration_range_cpd": [1.0, 18.0],
