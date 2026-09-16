@@ -41,3 +41,6 @@ vpsych-data/
 # Local calibration/session artifacts if generated inside the repo tree
 /status.json
 /plan.json
+
+# Claude Code agent worktrees
+.claude/
