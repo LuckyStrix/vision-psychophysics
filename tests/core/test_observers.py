@@ -106,6 +106,47 @@ def test_csf_observer_response_rate_matches_p_correct() -> None:
     assert observed_p == pytest.approx(expected_p, abs=0.03)
 
 
+def test_psychometric_observer_decide_correct_matches_respond() -> None:
+    """decide_correct and respond must draw RNG identically (same is-correct decision)."""
+    fn = _true_function()
+    obs = PsychometricObserver(fn, n_afc=2)
+    stim = {"intensity": -1.0, "correct_alternative": 0}
+    for seed in range(10):
+        rng_a = np.random.default_rng(seed)
+        rng_b = np.random.default_rng(seed)
+        is_correct = obs.decide_correct(stim, rng_a)
+        response = obs.respond(stim, rng_b)
+        assert is_correct == (response == 0)
+
+
+def test_psychometric_observer_decide_correct_rate_matches_p_correct() -> None:
+    fn = _true_function()
+    obs = PsychometricObserver(fn, n_afc=2)
+    rng = np.random.default_rng(11)
+    x = -1.0
+    expected_p = fn.p_correct(x)
+    n = 4000
+    n_correct = sum(1 for _ in range(n) if obs.decide_correct({"intensity": x}, rng))
+    assert n_correct / n == pytest.approx(expected_p, abs=0.03)
+
+
+def test_csf_observer_decide_correct_matches_respond() -> None:
+    obs = CSFObserver(
+        peak_gain_log10=1.5,
+        peak_freq_cpd=3.0,
+        bandwidth_octaves=3.0,
+        low_freq_truncation_log10=1.0,
+        n_afc=2,
+    )
+    stim = {"spatial_frequency_cpd": 3.0, "contrast": 0.03, "correct_alternative": 0}
+    for seed in range(10):
+        rng_a = np.random.default_rng(seed)
+        rng_b = np.random.default_rng(seed)
+        is_correct = obs.decide_correct(stim, rng_a)
+        response = obs.respond(stim, rng_b)
+        assert is_correct == (response == 0)
+
+
 def test_csf_observer_is_deterministic_given_seeded_rng() -> None:
     obs1 = CSFObserver(
         peak_gain_log10=1.5,

@@ -45,12 +45,30 @@ Input keys (set by :class:`TrialLoop` before calling ``present``):
   :class:`SimulatedBackend`, or `None` for :class:`PsychoPyBackend`. A
   test's ``present()`` should, when this is not `None`, skip drawing to
   ``win`` (which is `None` in that case -- see
-  :attr:`PresentationBackend.win`) entirely and instead call
-  ``simulated_observer.respond(stimulus_params, rng)`` to obtain a
-  simulated response, fabricating a plausible ``stimulus_onset_s`` and
-  perfect ``frame_intervals_s`` (see :class:`SimulatedBackend` for a
-  worked example, used by this module's own tests via a minimal dummy
-  test).
+  :attr:`PresentationBackend.win`) entirely and obtain a simulated response
+  one of two documented ways (see
+  :class:`~vpsych.core.observers.SimulatedObserver`'s docstring for the
+  full contract):
+
+  1. ``simulated_observer.respond(stimulus_params, rng)`` directly, when
+     ``stimulus_params`` already carries the
+     ``"correct_alternative"``/``"alternatives"`` keys that convention
+     expects and this test's response representation matches what it
+     returns.
+  2. The decoupled, generally-preferred path:
+     ``correct = simulated_observer.decide_correct(stimulus_params, rng)``
+     (present on every built-in observer, though not required by the
+     `SimulatedObserver` Protocol itself) followed by
+     ``response = self.simulated_response(correct, stimulus_params, rng)``
+     (:meth:`~vpsych.tests_catalog.base.PsychophysicalTest.simulated_response`,
+     a concrete hook on the test base class with a sensible default a test
+     may override). This is the path to use whenever the observer's own
+     stimulus-dict convention (``"correct_alternative"``/``"alternatives"``)
+     doesn't fit a test's response shape.
+
+  Either way, ``present()`` fabricates a plausible ``stimulus_onset_s`` and
+  perfect ``frame_intervals_s`` (see :class:`SimulatedBackend` for a worked
+  example, used by this module's own tests via a minimal dummy test).
 
 Output keys (a test's ``present()`` must set before returning, since
 :class:`~vpsych.tests_catalog.base.PresentedTrial` itself does not carry
@@ -190,6 +208,17 @@ class SimulatedBackend(PresentationBackend):
         self._observer = observer
         self._abort_after_trials = abort_after_trials
         self._trials_presented = 0
+
+    def set_observer(self, observer: SimulatedObserver) -> None:
+        """Swap the active observer (e.g. per task, for a multi-task simulated session).
+
+        `vpsych.runner.__main__.run_session` calls this before each planned
+        test when `--simulate-config` gives different observer parameters
+        per task, since one `SimulatedBackend` instance is reused across an
+        entire session (`build_trial_ctx` reads whichever observer is
+        currently set).
+        """
+        self._observer = observer
 
     @property
     def win(self) -> Any:

@@ -104,7 +104,16 @@ class _AlwaysCorrectObserver:
     session lifecycle (status updates, exit codes, writer calls) against a
     minimal test before real, statistically calibrated simulated observers
     (`vpsych.core.observers.PsychometricObserver`) are implemented.
+
+    Also implements `decide_correct` (trivially: always `True`), the
+    decoupled response-mapping path documented on
+    `vpsych.core.observers.SimulatedObserver` -- unlike `respond`, it needs
+    no stimulus keys at all.
     """
+
+    def decide_correct(self, stimulus: dict[str, Any], rng: Any) -> bool:
+        del stimulus, rng
+        return True
 
     def respond(self, stimulus: dict[str, Any], rng: Any) -> Any:
         del rng
@@ -122,11 +131,13 @@ _BUILTIN_SIMULATED_OBSERVERS: dict[str, Callable[[], SimulatedObserver]] = {
 
 
 def resolve_simulated_observer(name: str) -> SimulatedObserver:
-    """Resolve a `--simulate` observer name to a `SimulatedObserver` instance.
+    """Resolve a bare `--simulate` observer name to a `SimulatedObserver` instance.
 
     Args:
         name: One of the built-in observer names (currently just
-            ``"always_correct"``; see `_BUILTIN_SIMULATED_OBSERVERS`).
+            ``"always_correct"``; see `_BUILTIN_SIMULATED_OBSERVERS`). For a
+            parameterized observer spec (``"psychometric:..."``,
+            ``"csf:..."``), use `parse_simulated_observer_spec` instead.
 
     Returns:
         The constructed observer.
@@ -140,6 +151,162 @@ def resolve_simulated_observer(name: str) -> SimulatedObserver:
         raise ValueError(
             f"Unknown simulated observer {name!r}. Known: {sorted(_BUILTIN_SIMULATED_OBSERVERS)}"
         ) from None
+
+
+def _parse_kv_params(rest: str) -> dict[str, float]:
+    """Parse a comma-separated ``key=value`` parameter string into a `dict[str, float]`."""
+    params: dict[str, float] = {}
+    for pair in rest.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        key, sep, value = pair.partition("=")
+        if not sep:
+            raise ValueError(f"Malformed observer parameter {pair!r}; expected key=value.")
+        try:
+            params[key.strip()] = float(value)
+        except ValueError:
+            raise ValueError(f"Observer parameter {pair!r} has a non-numeric value.") from None
+    return params
+
+
+def build_simulated_observer(kind: str, params: dict[str, float]) -> SimulatedObserver:
+    """Construct a parameterized `SimulatedObserver` from a `kind` and numeric `params`.
+
+    Args:
+        kind: ``"psychometric"`` (-> `vpsych.core.observers.PsychometricObserver`,
+            a fixed-family weibull psychometric function on a log10 intensity
+            scale) or ``"csf"`` (-> `vpsych.core.observers.CSFObserver`).
+        params: Numeric parameters for `kind` (see `parse_simulated_observer_spec`
+            for the recognized keys and their defaults).
+
+    Returns:
+        The constructed observer.
+
+    Raises:
+        ValueError: If `kind` is unknown, or a required parameter is missing.
+    """
+    from vpsych.core.observers import CSFObserver, PsychometricObserver
+    from vpsych.core.procedures.qcsf import DEFAULT_PSYCHOMETRIC_SLOPE
+    from vpsych.core.psychometric import PsychometricFunction
+
+    if kind == "psychometric":
+        missing = [k for k in ("threshold", "slope") if k not in params]
+        if missing:
+            raise ValueError(
+                f"psychometric observer spec is missing required parameter(s) {missing}: "
+                f"needs at least threshold=<float>,slope=<float>."
+            )
+        fn = PsychometricFunction(
+            family="weibull",
+            threshold=params["threshold"],
+            slope=params["slope"],
+            guess=params.get("guess", 0.5),
+            lapse=params.get("lapse", 0.02),
+            intensity_scale="log10",
+        )
+        return PsychometricObserver(fn, n_afc=int(params.get("n_afc", 2)))
+
+    if kind == "csf":
+        required = ("peak_gain", "peak_freq", "bandwidth", "low_freq_truncation")
+        missing = [k for k in required if k not in params]
+        if missing:
+            raise ValueError(f"csf observer spec is missing required parameter(s) {missing}.")
+        return CSFObserver(
+            peak_gain_log10=params["peak_gain"],
+            peak_freq_cpd=params["peak_freq"],
+            bandwidth_octaves=params["bandwidth"],
+            low_freq_truncation_log10=params["low_freq_truncation"],
+            n_afc=int(params.get("n_afc", 2)),
+            slope=params.get("slope", DEFAULT_PSYCHOMETRIC_SLOPE),
+            lapse_rate=params.get("lapse", 0.02),
+        )
+
+    raise ValueError(f"Unknown simulated observer kind {kind!r}. Known: psychometric, csf.")
+
+
+def parse_simulated_observer_spec(spec: str) -> SimulatedObserver:
+    """Parse a `--simulate`/`--simulate-config` observer spec string.
+
+    Recognized forms:
+
+    - ``"always_correct"``: the trivial built-in observer (see
+      `resolve_simulated_observer`).
+    - ``"psychometric:threshold=<f>,slope=<f>[,lapse=<f>][,guess=<f>][,n_afc=<int>]"``:
+      a `vpsych.core.observers.PsychometricObserver` with a fixed
+      ``family="weibull"``, ``intensity_scale="log10"`` true function.
+      ``lapse`` defaults to ``0.02``, ``guess`` to ``0.5``, ``n_afc`` to ``2``.
+    - ``"csf:peak_gain=<f>,peak_freq=<f>,bandwidth=<f>,low_freq_truncation=<f>"
+      "[,slope=<f>][,lapse=<f>][,n_afc=<int>]"``: a
+      `vpsych.core.observers.CSFObserver`. ``slope`` defaults to
+      `vpsych.core.procedures.qcsf.DEFAULT_PSYCHOMETRIC_SLOPE`, ``lapse`` to
+      ``0.02``, ``n_afc`` to ``2``.
+
+    Args:
+        spec: The spec string, e.g.
+            ``"psychometric:threshold=-1.0,slope=3.5,lapse=0.02"``.
+
+    Returns:
+        The constructed observer.
+
+    Raises:
+        ValueError: If `spec` names an unknown kind/observer, is missing a
+            required parameter, or has a malformed ``key=value`` pair.
+    """
+    if ":" not in spec:
+        return resolve_simulated_observer(spec)
+    kind, _, rest = spec.partition(":")
+    return build_simulated_observer(kind.strip(), _parse_kv_params(rest))
+
+
+def _simulated_observer_from_json(obj: Any) -> SimulatedObserver:
+    """Build a `SimulatedObserver` from one `--simulate-config` JSON entry.
+
+    `obj` may be a spec string (parsed via `parse_simulated_observer_spec`)
+    or a JSON object ``{"kind": "psychometric", "threshold": -1.0, ...}``
+    (numeric keys other than ``"kind"`` are passed to `build_simulated_observer`).
+    """
+    if isinstance(obj, str):
+        return parse_simulated_observer_spec(obj)
+    if isinstance(obj, dict):
+        kind = obj.get("kind")
+        if not kind:
+            raise ValueError(f"--simulate-config entry is missing a 'kind' key: {obj!r}")
+        params = {k: float(v) for k, v in obj.items() if k != "kind"}
+        return build_simulated_observer(str(kind), params)
+    raise ValueError(
+        f"--simulate-config entries must be a spec string or a JSON object, got {obj!r}"
+    )
+
+
+def load_simulate_config(path: Path) -> dict[str, SimulatedObserver]:
+    """Load `--simulate-config PATH`: a per-task JSON map of observer specs.
+
+    Args:
+        path: Path to a JSON file whose top level is an object mapping
+            `TestSpec.id` (task id) to either a spec string (see
+            `parse_simulated_observer_spec`) or a JSON object
+            (see `_simulated_observer_from_json`), e.g.::
+
+                {
+                  "visual_acuity": "psychometric:threshold=-1.0,slope=3.5,lapse=0.02",
+                  "contrast_sensitivity_function": {
+                    "kind": "csf", "peak_gain": 1.6, "peak_freq": 3.0,
+                    "bandwidth": 3.0, "low_freq_truncation": 1.0
+                  }
+                }
+
+    Returns:
+        A `dict` mapping task id to the constructed observer for that task.
+
+    Raises:
+        ValueError: If the file's top level isn't a JSON object, or any
+            entry is malformed (see `_simulated_observer_from_json`).
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must contain a JSON object mapping task_id -> observer spec.")
+    return {str(task_id): _simulated_observer_from_json(v) for task_id, v in raw.items()}
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -182,8 +349,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="OBSERVER",
         help=(
-            "Run headless against a named simulated observer instead of a live PsychoPy window "
-            "and keyboard (e.g. for CI end-to-end tests). Omit for a normal, real display run."
+            "Run headless against a simulated observer instead of a live PsychoPy window and "
+            "keyboard (e.g. for CI end-to-end tests), used as every task's observer except where "
+            "--simulate-config overrides it for a specific task. OBSERVER is a built-in name "
+            "('always_correct') or a parameterized spec ('psychometric:threshold=-1.0,"
+            "slope=3.5,lapse=0.02' or 'csf:peak_gain=1.6,peak_freq=3.0,bandwidth=3.0,"
+            "low_freq_truncation=1.0'; see parse_simulated_observer_spec). Omit both --simulate "
+            "and --simulate-config for a normal, real display run."
+        ),
+    )
+    parser.add_argument(
+        "--simulate-config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a JSON file mapping task_id -> observer spec (string or object; see "
+            "load_simulate_config) for per-task simulated-observer parameters. Implies "
+            "--simulate mode even without --simulate itself; a task not listed here falls back "
+            "to --simulate's observer, or is an error if --simulate was not given either."
         ),
     )
     return parser
@@ -289,15 +473,20 @@ def run_session(
     invocation.
 
     Args:
-        args: Parsed arguments (see `build_arg_parser`).
+        args: Parsed arguments (see `build_arg_parser`). `args.simulate`
+            and/or `args.simulate_config` select simulated-observer mode
+            (see `parse_simulated_observer_spec`/`load_simulate_config`);
+            when `args.simulate_config` gives a per-task observer for every
+            planned task, `args.simulate` may be omitted.
         writer_factory: Constructs the `Writer` used to persist this
             session's data; defaults to the real `SessionWriter` (which
             currently raises `NotImplementedError` until that module is
             implemented -- caught by this function's error handling like
             any other exception).
-        simulated_observer: When `args.simulate` is set, the observer to
-            drive `SimulatedBackend` with; if `None`, resolved from
-            `args.simulate` via `resolve_simulated_observer`.
+        simulated_observer: When simulate mode is active, the *default*
+            observer to drive `SimulatedBackend` with for any task not
+            covered by `args.simulate_config`; if `None`, resolved from
+            `args.simulate` via `parse_simulated_observer_spec`.
 
     Returns:
         A `RunnerExitCode` value.
@@ -354,9 +543,28 @@ def run_session(
 
         rng, rng_seed = make_rng(plan.seed)
 
-        if args.simulate:
-            observer = simulated_observer or resolve_simulated_observer(args.simulate)
-            backend = SimulatedBackend(observer)
+        simulate_config_path: Path | None = getattr(args, "simulate_config", None)
+        per_task_observers: dict[str, SimulatedObserver] = (
+            load_simulate_config(simulate_config_path) if simulate_config_path else {}
+        )
+        default_observer = simulated_observer
+        if default_observer is None and args.simulate:
+            default_observer = parse_simulated_observer_spec(args.simulate)
+
+        if args.simulate or simulate_config_path is not None:
+            for planned, _test_cls in resolved_tests:
+                if planned.task_id not in per_task_observers and default_observer is None:
+                    raise ValueError(
+                        f"--simulate-config has no entry for task {planned.task_id!r} and no "
+                        "default --simulate observer was given."
+                    )
+            initial_observer = (
+                per_task_observers.get(resolved_tests[0][0].task_id, default_observer)
+                if resolved_tests
+                else default_observer
+            )
+            assert initial_observer is not None  # guaranteed by the loop above
+            backend = SimulatedBackend(initial_observer)
             measured_refresh_hz = calibration.geometry.refresh_hz
         else:
             backend = PsychoPyBackend(calibration.geometry)
@@ -404,6 +612,11 @@ def run_session(
             planned, test_cls = resolved_tests[idx]
             run_number = run_numbers.get(planned.task_id, 0) + 1
             run_numbers[planned.task_id] = run_number
+
+            if isinstance(backend, SimulatedBackend):
+                task_observer = per_task_observers.get(planned.task_id, default_observer)
+                assert task_observer is not None  # guaranteed by the pre-loop check above
+                backend.set_observer(task_observer)
 
             display = calibration.geometry.model_copy(
                 update={

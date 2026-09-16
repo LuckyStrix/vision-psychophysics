@@ -38,7 +38,10 @@ from vpsych.runner.__main__ import (
     _install_signal_handlers,
     _SessionAbortedError,
     build_arg_parser,
+    build_simulated_observer,
     load_session_plan,
+    load_simulate_config,
+    parse_simulated_observer_spec,
     run_session,
 )
 from vpsych.tests_catalog import base as catalog_base
@@ -375,6 +378,357 @@ def test_run_session_writer_exception_is_caught(
     final_status = status_module.RunnerStatus.read(tmp_path / "status.json")
     assert final_status.state == "error"
     assert final_status.error is not None
+
+
+def test_parse_simulated_observer_spec_always_correct() -> None:
+    from vpsych.runner.__main__ import _AlwaysCorrectObserver
+
+    obs = parse_simulated_observer_spec("always_correct")
+    assert isinstance(obs, _AlwaysCorrectObserver)
+
+
+def test_parse_simulated_observer_spec_unknown_builtin_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown simulated observer"):
+        parse_simulated_observer_spec("not_a_real_observer")
+
+
+def test_parse_simulated_observer_spec_psychometric() -> None:
+    from vpsych.core.observers import PsychometricObserver
+
+    obs = parse_simulated_observer_spec("psychometric:threshold=-1.0,slope=3.5,lapse=0.02")
+    assert isinstance(obs, PsychometricObserver)
+    assert obs.true_function.threshold == pytest.approx(-1.0)
+    assert obs.true_function.slope == pytest.approx(3.5)
+    assert obs.true_function.lapse == pytest.approx(0.02)
+    assert obs.true_function.guess == pytest.approx(0.5)  # default
+    assert obs.n_afc == 2  # default
+
+
+def test_parse_simulated_observer_spec_psychometric_missing_required_raises() -> None:
+    with pytest.raises(ValueError, match="threshold"):
+        parse_simulated_observer_spec("psychometric:slope=3.5")
+
+
+def test_parse_simulated_observer_spec_csf() -> None:
+    from vpsych.core.observers import CSFObserver
+
+    obs = parse_simulated_observer_spec(
+        "csf:peak_gain=1.6,peak_freq=3.0,bandwidth=3.0,low_freq_truncation=1.0"
+    )
+    assert isinstance(obs, CSFObserver)
+    assert obs.peak_gain_log10 == pytest.approx(1.6)
+    assert obs.peak_freq_cpd == pytest.approx(3.0)
+    assert obs.bandwidth_octaves == pytest.approx(3.0)
+    assert obs.low_freq_truncation_log10 == pytest.approx(1.0)
+
+
+def test_parse_simulated_observer_spec_csf_missing_required_raises() -> None:
+    with pytest.raises(ValueError, match="missing required"):
+        parse_simulated_observer_spec("csf:peak_gain=1.6")
+
+
+def test_build_simulated_observer_unknown_kind_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown simulated observer kind"):
+        build_simulated_observer("bogus", {})
+
+
+def test_parse_simulated_observer_spec_malformed_pair_raises() -> None:
+    with pytest.raises(ValueError, match="Malformed"):
+        parse_simulated_observer_spec("psychometric:threshold")
+
+
+def test_load_simulate_config_string_and_object_entries(tmp_path: Path) -> None:
+    from vpsych.core.observers import CSFObserver, PsychometricObserver
+
+    config_path = tmp_path / "simulate_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "acuity": "psychometric:threshold=-1.0,slope=3.5,lapse=0.02",
+                "csf_task": {
+                    "kind": "csf",
+                    "peak_gain": 1.6,
+                    "peak_freq": 3.0,
+                    "bandwidth": 3.0,
+                    "low_freq_truncation": 1.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    observers = load_simulate_config(config_path)
+    assert set(observers) == {"acuity", "csf_task"}
+    assert isinstance(observers["acuity"], PsychometricObserver)
+    assert isinstance(observers["csf_task"], CSFObserver)
+
+
+def test_load_simulate_config_requires_json_object(tmp_path: Path) -> None:
+    config_path = tmp_path / "bad_config.json"
+    config_path.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON object"):
+        load_simulate_config(config_path)
+
+
+class _PsychometricDummyProcedure:
+    """Presents a fixed intensity for many trials -- enough to statistically tell apart
+    two different --simulate-config observers by their resulting main-block correct rate."""
+
+    intensity_units = "log10_contrast"
+
+    def __init__(self, n_trials: int = 120, fixed_intensity: float = -1.0) -> None:
+        self.n_trials = n_trials
+        self.fixed_intensity = fixed_intensity
+        self.n_updates = 0
+        self.finished = False
+
+    def next_intensity(self) -> float:
+        return self.fixed_intensity
+
+    def update(self, intensity: float, correct: bool) -> None:
+        self.n_updates += 1
+        if self.n_updates >= self.n_trials:
+            self.finished = True
+
+    def estimate(self) -> ThresholdEstimate:
+        return ThresholdEstimate(
+            value=self.fixed_intensity,
+            ci_low=self.fixed_intensity - 0.1,
+            ci_high=self.fixed_intensity + 0.1,
+            ci_level=0.95,
+            units=self.intensity_units,
+            method="dummy",
+        )
+
+    def state_dict(self) -> dict[str, Any]:
+        return {"n_updates": self.n_updates}
+
+
+def _psychometric_dummy_spec(task_id: str) -> TestSpec:
+    return TestSpec(
+        id=task_id,
+        name="Runner Psychometric Dummy Test",
+        version="0.1.0",
+        domain="contrast",
+        description_participant="n/a",
+        description_technical="Dummy task exercising --simulate psychometric:/csf: specs.",
+        measures="Nothing real.",
+        output_units="log10_contrast",
+        estimated_minutes=1.0,
+        allowed_eyes=["OU"],
+        requirements=TestRequirements(),
+        citations=[],
+        params_model=_RunnerDummyParams,
+    )
+
+
+class _RunnerPsychometricDummyTest(PsychophysicalTest):
+    """Demonstrates the decoupled decide_correct + simulated_response response-mapping
+    path (see vpsych.core.trial_loop's module docstring), robust to any --simulate
+    observer kind (always_correct, psychometric, csf), unlike _RunnerDummyTest above
+    (which only works with always_correct). `spec` is set per-subclass (below) since
+    `TestSpec.id` -- what TrialRecord.task_id actually records -- is a class attribute,
+    not derived from the registry key a test happens to be registered under."""
+
+    def __init__(
+        self, params: BaseModel, display: Any, calibration: Any, rng: np.random.Generator
+    ) -> None:
+        self.params = params
+        self._n = 0
+
+    def make_procedure(self) -> _PsychometricDummyProcedure:
+        return _PsychometricDummyProcedure()
+
+    def make_catch_trial_intensity(self) -> float:
+        return 5.0  # suprathreshold: far above any threshold used in these tests
+
+    def build_stimuli(self, win: Any) -> dict[str, Any]:
+        return {}
+
+    def present(
+        self, win: Any, intensity_or_stimulus: Any, trial_ctx: dict[str, Any]
+    ) -> PresentedTrial:
+        self._n += 1
+        rng = trial_ctx["rng"]
+        intensity = float(intensity_or_stimulus)
+        correct_side = "left" if rng.random() < 0.5 else "right"
+        stimulus_params = {
+            "correct_response": correct_side,
+            "intensity": intensity,
+            "spatial_frequency_cpd": 3.0,
+            "contrast": 10.0**intensity,
+        }
+        trial_ctx["stimulus_params"] = stimulus_params
+        trial_ctx["correct_response"] = correct_side
+        observer = trial_ctx["simulated_observer"]
+        is_correct = observer.decide_correct(stimulus_params, rng)
+        response = self.simulated_response(is_correct, stimulus_params, rng)
+        return PresentedTrial(
+            response=response,
+            rt_s=0.3,
+            stimulus_onset_s=float(self._n),
+            n_dropped_frames=0,
+            frame_intervals_s=[1 / 60.0] * 5,
+        )
+
+    def response_keys(self) -> list[str]:
+        return ["left", "right"]
+
+    def score(self, response: Any, stimulus_params: dict[str, Any]) -> bool:
+        return bool(response == stimulus_params["correct_response"])
+
+    def instructions(self) -> str:
+        return "n/a"
+
+    def summarize(self, trials: Any) -> TestSummary:
+        return TestSummary(
+            task_id=self.spec.id,
+            task_version=self.spec.version,
+            eye="OU",
+            run=1,
+            estimate=ThresholdEstimate(
+                value=-1.0,
+                ci_low=-1.2,
+                ci_high=-0.8,
+                ci_level=0.95,
+                units="log10_contrast",
+                method="dummy",
+            ),
+            n_trials=len(trials),
+            n_catch=int(trials["is_catch"].sum()) if len(trials) else 0,
+            catch_lapse_rate=0.0,
+            analysis_version="0.0.0",
+        )
+
+
+class _RunnerPsyEasyTest(_RunnerPsychometricDummyTest):
+    spec = _psychometric_dummy_spec("runner_psy_easy")
+
+
+class _RunnerPsyHardTest(_RunnerPsychometricDummyTest):
+    spec = _psychometric_dummy_spec("runner_psy_hard")
+
+
+def test_run_session_simulate_config_dispatches_per_task_observer(tmp_path: Path) -> None:
+    """Two tasks, two different --simulate-config psychometric specs: the easy task
+    (threshold matches the presented intensity exactly) should score correct far more
+    often than the hard task (threshold very far from the presented intensity), proving
+    the runner is actually using a different, per-task observer for each -- not the
+    same one for the whole session."""
+    catalog_base._REGISTRY["runner_psy_easy"] = _RunnerPsyEasyTest
+    catalog_base._REGISTRY["runner_psy_hard"] = _RunnerPsyHardTest
+    try:
+        data_root = tmp_path / "data"
+        _write_calibration(data_root, _calibration())
+        plan_path = tmp_path / "plan.json"
+        raw = {
+            "participant_id": "sub-0001",
+            "tests": [
+                {
+                    "task_id": "runner_psy_easy",
+                    "eye": "OU",
+                    "params": {},
+                    "viewing_distance_cm": 57.0,
+                },
+                {
+                    "task_id": "runner_psy_hard",
+                    "eye": "OU",
+                    "params": {},
+                    "viewing_distance_cm": 57.0,
+                },
+            ],
+            "ordering": "fixed",
+            "seed": 123,
+        }
+        plan_path.write_text(json.dumps(raw), encoding="utf-8")
+
+        config_path = tmp_path / "simulate_config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    # Threshold exactly at the fixed presented intensity (-1.0): easy.
+                    "runner_psy_easy": "psychometric:threshold=-1.0,slope=3.5,lapse=0.02",
+                    # Threshold far above the presented intensity: near chance.
+                    "runner_psy_hard": "psychometric:threshold=5.0,slope=3.5,lapse=0.02",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        parser = build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--session-plan",
+                str(plan_path),
+                "--status-file",
+                str(tmp_path / "status.json"),
+                "--data-root",
+                str(data_root),
+                "--simulate-config",
+                str(config_path),
+            ]
+        )
+        fake_writer = _FakeRunnerWriter()
+        exit_code = run_session(args, writer_factory=lambda *a: fake_writer)
+        assert exit_code == RunnerExitCode.OK
+
+        by_task: dict[str, list[bool]] = {"runner_psy_easy": [], "runner_psy_hard": []}
+        for trial in fake_writer.trials:
+            if trial.block == "main" and not trial.is_catch:
+                by_task[trial.task_id].append(bool(trial.correct))
+
+        easy_rate = sum(by_task["runner_psy_easy"]) / len(by_task["runner_psy_easy"])
+        hard_rate = sum(by_task["runner_psy_hard"]) / len(by_task["runner_psy_hard"])
+        assert easy_rate > 0.65  # ~0.74 expected (guess=0.5, lapse=0.02, at threshold)
+        assert hard_rate < 0.65  # ~0.5 expected (near chance, threshold far from intensity)
+        assert easy_rate - hard_rate > 0.1
+    finally:
+        catalog_base._REGISTRY.pop("runner_psy_easy", None)
+        catalog_base._REGISTRY.pop("runner_psy_hard", None)
+
+
+def test_run_session_simulate_config_missing_task_without_default_errors(tmp_path: Path) -> None:
+    catalog_base._REGISTRY["runner_psy_easy"] = _RunnerPsyEasyTest
+    try:
+        data_root = tmp_path / "data"
+        _write_calibration(data_root, _calibration())
+        plan_path = tmp_path / "plan.json"
+        raw = {
+            "participant_id": "sub-0001",
+            "tests": [
+                {
+                    "task_id": "runner_psy_easy",
+                    "eye": "OU",
+                    "params": {},
+                    "viewing_distance_cm": 57.0,
+                }
+            ],
+            "ordering": "fixed",
+            "seed": 1,
+        }
+        plan_path.write_text(json.dumps(raw), encoding="utf-8")
+        # An empty config covers no tasks, and no --simulate default is given.
+        config_path = tmp_path / "simulate_config.json"
+        config_path.write_text(json.dumps({}), encoding="utf-8")
+
+        parser = build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--session-plan",
+                str(plan_path),
+                "--status-file",
+                str(tmp_path / "status.json"),
+                "--data-root",
+                str(data_root),
+                "--simulate-config",
+                str(config_path),
+            ]
+        )
+        exit_code = run_session(args, writer_factory=lambda *a: _FakeRunnerWriter())
+        assert exit_code == RunnerExitCode.ERROR
+        status = status_module.RunnerStatus.read(tmp_path / "status.json")
+        assert status.state == "error"
+    finally:
+        catalog_base._REGISTRY.pop("runner_psy_easy", None)
 
 
 def test_signal_handler_raises_session_aborted() -> None:

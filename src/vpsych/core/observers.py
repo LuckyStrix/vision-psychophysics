@@ -26,6 +26,33 @@ class SimulatedObserver(Protocol):
     `respond` in place of collecting a real keypress, so the same trial loop
     code path is exercised whether the response comes from a human or a
     simulated observer (see `vpsych.runner.__main__`'s `--simulate` option).
+
+    Response mapping onto the test plugin interface: an observer *decides*
+    correct/incorrect against its own ground truth (a probability computed
+    from the presented stimulus), but a test's `score(response,
+    stimulus_params)` needs an actual response value in that test's own
+    representation (a key label, a direction, ...). Two ways to bridge that,
+    both fully supported here:
+
+    1. `respond` itself already returns a scorable response, via the
+       `"correct_alternative"`/`"alternatives"` stimulus keys (see
+       `PsychometricObserver.respond`/`CSFObserver.respond`) -- a test's
+       `present()` can call this directly when its stimulus dict already
+       carries those keys and its response representation matches.
+    2. `decide_correct(stimulus, rng) -> bool` (implemented by the built-in
+       observers below) exposes *only* the correct/incorrect decision, for a
+       test whose response representation doesn't fit convention 1's
+       `correct_alternative`/`alternatives` shape (or that simply prefers to
+       keep the observer and its own response representation decoupled).
+       Pair it with `vpsych.tests_catalog.base.PsychophysicalTest
+       .simulated_response(correct, stimulus_params, rng)`, the documented,
+       overridable hook that turns a bare `correct: bool` into this test's
+       response representation (default implementation: echoes
+       `stimulus_params["correct_response"]` when correct, otherwise a
+       random other value from `response_keys()`). `decide_correct` is not
+       part of this Protocol's required surface (not every conceivable
+       observer needs it, and `respond` alone is enough for convention 1),
+       but every built-in observer in this module implements it.
     """
 
     def respond(self, stimulus: dict[str, Any], rng: np.random.Generator) -> Any:
@@ -77,6 +104,24 @@ class PsychometricObserver:
         self.true_function = true_function
         self.n_afc = n_afc
 
+    def decide_correct(self, stimulus: dict[str, Any], rng: np.random.Generator) -> bool:
+        """Decide (without picking a response label) whether this trial is answered correctly.
+
+        Reads `stimulus["intensity"]` (required) and draws exactly one
+        `rng.random()` call -- the same draw `respond` uses internally, so
+        `respond(s, rng)` and `decide_correct(s, rng)` (called with a
+        freshly re-seeded/forked `rng` at the same point) consume RNG state
+        identically. Factored out of `respond` so a test's `present()` can
+        ask "would this stimulus be answered correctly" independently of
+        this observer's own alternative-labeling convention -- see
+        `vpsych.tests_catalog.base.PsychophysicalTest.simulated_response`,
+        the documented bridge from this boolean to a test-specific response
+        value.
+        """
+        intensity = float(stimulus["intensity"])
+        p_correct = self.true_function.p_correct(intensity)
+        return bool(rng.random() < p_correct)
+
     def respond(self, stimulus: dict[str, Any], rng: np.random.Generator) -> Any:
         """Respond according to `true_function.p_correct(stimulus["intensity"])`.
 
@@ -86,19 +131,18 @@ class PsychometricObserver:
         `stimulus["alternatives"]` (the full list of alternative labels;
         defaults to `list(range(self.n_afc))`).
 
-        Draws exactly one `rng.random()` call to decide correct/incorrect,
-        and -- only on an incorrect trial -- one `rng.integers()` call to
-        pick uniformly among the remaining `n_afc - 1` alternatives, so
-        response sequences are fully reproducible from a seeded `rng`.
+        Draws exactly one `rng.random()` call to decide correct/incorrect
+        (via `decide_correct`), and -- only on an incorrect trial -- one
+        `rng.integers()` call to pick uniformly among the remaining
+        `n_afc - 1` alternatives, so response sequences are fully
+        reproducible from a seeded `rng`.
 
         Returns:
             `stimulus["correct_alternative"]` on a correct trial, or a
             uniformly random other element of `alternatives` on an
             incorrect trial.
         """
-        intensity = float(stimulus["intensity"])
-        p_correct = self.true_function.p_correct(intensity)
-        is_correct = bool(rng.random() < p_correct)
+        is_correct = self.decide_correct(stimulus, rng)
 
         correct_answer = stimulus.get("correct_alternative", 0)
         alternatives = stimulus.get("alternatives", list(range(self.n_afc)))
@@ -177,6 +221,18 @@ class CSFObserver:
         p = self.guess_rate + (1.0 - self.guess_rate - self.lapse_rate) * f
         return float(np.clip(p, 0.0, 1.0))
 
+    def decide_correct(self, stimulus: dict[str, Any], rng: np.random.Generator) -> bool:
+        """Decide (without picking a response label) whether this trial is answered correctly.
+
+        Reads `stimulus["spatial_frequency_cpd"]` and `stimulus["contrast"]`
+        (both required). See `PsychometricObserver.decide_correct` for why
+        this is factored out of `respond`.
+        """
+        freq = float(stimulus["spatial_frequency_cpd"])
+        contrast = float(stimulus["contrast"])
+        p_correct = self.p_correct(freq, contrast)
+        return bool(rng.random() < p_correct)
+
     def respond(self, stimulus: dict[str, Any], rng: np.random.Generator) -> Any:
         """Respond according to `p_correct` at `stimulus`'s frequency/contrast.
 
@@ -185,10 +241,7 @@ class CSFObserver:
         `correct_alternative`/`alternatives` convention and RNG-usage
         guarantee, which this method follows identically.
         """
-        freq = float(stimulus["spatial_frequency_cpd"])
-        contrast = float(stimulus["contrast"])
-        p_correct = self.p_correct(freq, contrast)
-        is_correct = bool(rng.random() < p_correct)
+        is_correct = self.decide_correct(stimulus, rng)
 
         correct_answer = stimulus.get("correct_alternative", 0)
         alternatives = stimulus.get("alternatives", list(range(self.n_afc)))

@@ -385,6 +385,58 @@ class PsychophysicalTest(ABC):
         """
         raise NotImplementedError
 
+    def simulated_response(
+        self, correct: bool, stimulus_params: dict[str, Any], rng: np.random.Generator
+    ) -> Any:
+        """Turn a simulated observer's correct/incorrect decision into a scorable response.
+
+        Optional hook (concrete, not abstract, so existing tests need not
+        override it): a test's `present()` may, when
+        `trial_ctx["simulated_observer"]` is not `None`, ask that observer
+        only *whether* this trial would be answered correctly (via
+        `vpsych.core.observers.SimulatedObserver.decide_correct`, where
+        available) and call this method to produce an actual response value
+        in this test's own representation -- decoupling the observer's
+        ground-truth probability model from each test's response shape,
+        rather than every test having to match its stimulus dict to a
+        specific observer's own `respond()` conventions (e.g.
+        `"correct_alternative"`/`"alternatives"`). See
+        `vpsych.core.observers.SimulatedObserver`'s docstring for both
+        supported response-mapping conventions.
+
+        Default implementation: assumes `stimulus_params["correct_response"]`
+        is set (the `trial_ctx` Output-key convention every test already
+        sets for `TrialRecord.correct_response`) and that this test's
+        response representation is directly comparable via `==` to that
+        value (true for essentially every discrete-alternative task, e.g.
+        2-8AFC key-press tests). Returns `stimulus_params["correct_response"]`
+        verbatim when `correct`; otherwise returns a uniformly random other
+        value from `response_keys()` (or `stimulus_params["correct_response"]`
+        itself, as a last resort, if `response_keys()` has no other options).
+        Override this for a test whose response isn't one of `response_keys()`
+        (e.g. a continuous judgment).
+
+        Args:
+            correct: Whether this trial should be scored correct.
+            stimulus_params: This trial's stimulus parameters (as set on
+                `trial_ctx["stimulus_params"]`); must include
+                `"correct_response"` for the default implementation.
+            rng: Seeded RNG to use for any random choice among wrong
+                alternatives (see `trial_ctx["rng"]`) -- must be the only
+                source of randomness used, for reproducibility.
+
+        Returns:
+            A response value suitable for this test's `score()`.
+        """
+        correct_response = stimulus_params.get("correct_response")
+        if correct:
+            return correct_response
+        alternatives = [k for k in self.response_keys() if k != correct_response]
+        if not alternatives:
+            return correct_response
+        idx = int(rng.integers(len(alternatives)))
+        return alternatives[idx]
+
     @abstractmethod
     def response_keys(self) -> list[str]:
         """Return the keyboard keys this test accepts as responses.
