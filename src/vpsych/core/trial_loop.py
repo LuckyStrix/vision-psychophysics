@@ -535,9 +535,25 @@ class TrialLoop:
         ).write_atomic(self.status_path)
 
     def _present_and_build_record(
-        self, *, block: Block, is_catch: bool, trial_index: int, value: float | dict[str, float]
+        self,
+        *,
+        block: Block,
+        is_catch: bool,
+        trial_index: int,
+        value: float | dict[str, float],
+        updates_procedure: bool,
     ) -> tuple[TrialRecord, bool, list[float]]:
-        """Present one trial and build its `TrialRecord`. Returns (record, correct, intervals_s)."""
+        """Present one trial and build its `TrialRecord`. Returns (record, correct, intervals_s).
+
+        Args:
+            updates_procedure: Whether this trial should update `self.procedure`
+                (`True` only for non-catch main-block trials; `False` for the
+                demo trial, every practice trial, and every catch trial). The
+                update -- when `True` -- happens *before* `procedure_state` is
+                captured below, so `TrialRecord.procedure_state` is genuinely
+                the state "immediately after this trial" its docstring
+                promises, not the state the trial was presented under.
+        """
         trial_ctx = self.backend.build_trial_ctx(
             timeline=self.timeline,
             rng=self.rng,
@@ -550,6 +566,9 @@ class TrialLoop:
         stimulus_params = trial_ctx.get("stimulus_params", {})
         correct_response = trial_ctx.get("correct_response")
         correct = self.test.score(presented.response, stimulus_params)
+
+        if updates_procedure:
+            _update(self.procedure, value, correct)
 
         record = TrialRecord(
             participant_id=self.participant_id,
@@ -604,7 +623,11 @@ class TrialLoop:
         # Demo trial: shown, not recorded, not scored against the procedure.
         demo_value = self.test.make_catch_trial_intensity()
         self._present_and_build_record(
-            block="practice", is_catch=False, trial_index=0, value=demo_value
+            block="practice",
+            is_catch=False,
+            trial_index=0,
+            value=demo_value,
+            updates_procedure=False,
         )
 
         # Practice block: recorded, feedback shown, procedure NOT updated.
@@ -614,7 +637,11 @@ class TrialLoop:
                 return self._finish(trial_records, all_intervals, aborted=True, n_catch=0, n_main=0)
             practice_value = self.test.make_catch_trial_intensity()
             record, correct, intervals = self._present_and_build_record(
-                block="practice", is_catch=False, trial_index=i, value=practice_value
+                block="practice",
+                is_catch=False,
+                trial_index=i,
+                value=practice_value,
+                updates_procedure=False,
             )
             self.writer.append_trial(record)
             trial_records.append(record)
@@ -659,7 +686,11 @@ class TrialLoop:
                 value = _next_value(self.procedure)
 
             record, correct, intervals = self._present_and_build_record(
-                block="main", is_catch=is_catch, trial_index=main_trial_index, value=value
+                block="main",
+                is_catch=is_catch,
+                trial_index=main_trial_index,
+                value=value,
+                updates_procedure=not is_catch,
             )
             self.writer.append_trial(record)
             trial_records.append(record)
@@ -668,7 +699,6 @@ class TrialLoop:
             if is_catch:
                 n_catch += 1
             else:
-                _update(self.procedure, value, correct)
                 n_main_scored += 1
 
             last_was_catch = is_catch

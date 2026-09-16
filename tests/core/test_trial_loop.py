@@ -405,3 +405,42 @@ def test_break_message_triggered(monkeypatch: pytest.MonkeyPatch) -> None:
     loop, _writer = _make_loop(procedure, backend=backend, config=config)
     loop.run()
     assert any("break" in c.lower() for c in calls)
+
+
+def test_procedure_state_reflects_after_this_trial_not_before() -> None:
+    """Regression test: TrialRecord.procedure_state's docstring promises the
+    procedure's state "immediately after this trial" -- it must include this
+    same trial's own update, not just the updates from every trial before it."""
+    procedure = _DummyAdaptiveProcedure(n_trials=5)
+    config = TrialLoopConfig(n_practice_trials=0, catch_trial_probability=0.0)
+    loop, _writer = _make_loop(procedure, config=config)
+    result = loop.run()
+
+    main = [r for r in result.trial_records if r.block == "main"]
+    assert len(main) == 5
+    for i, record in enumerate(main, start=1):
+        assert record.procedure_state["n_updates"] == i
+
+
+def test_catch_trial_procedure_state_unchanged_from_preceding_trial() -> None:
+    """A catch trial must not update the procedure, so its recorded
+    procedure_state must equal whatever it was left at by the preceding
+    trial (not advanced by this catch trial's own response)."""
+    procedure = _DummyAdaptiveProcedure(n_trials=20)
+    # catch_trial_probability=1.0 makes every *eligible* trial a catch trial;
+    # min_main_trials_before_catch=1 keeps the very first main trial non-catch
+    # (so every catch trial below has a real preceding trial to compare to);
+    # the trial loop's own "never two catch trials in a row" rule then forces
+    # alternating catch/non-catch from there.
+    config = TrialLoopConfig(
+        n_practice_trials=0, catch_trial_probability=0.999999, min_main_trials_before_catch=1
+    )
+    loop, _writer = _make_loop(procedure, config=config)
+    result = loop.run()
+
+    main = [r for r in result.trial_records if r.block == "main"]
+    catch_indices = [i for i, r in enumerate(main) if r.is_catch]
+    assert catch_indices, "expected at least one catch trial with catch_trial_probability=1.0"
+    for i in catch_indices:
+        assert i > 0, "the very first main trial can't be a catch trial (nothing precedes it)"
+        assert main[i].procedure_state == main[i - 1].procedure_state
