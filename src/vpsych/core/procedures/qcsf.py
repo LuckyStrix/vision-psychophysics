@@ -75,6 +75,23 @@ DEFAULT_PSYCHOMETRIC_SLOPE = 0.35
 #: Standard spatial frequencies (cpd) at which `estimate()` reports log CS.
 STANDARD_FREQUENCIES_CPD = (1.0, 1.5, 3.0, 6.0, 12.0, 18.0)
 
+#: Recommended `max_trials` for a real test implementation using `QCSF` with
+#: `default_grids()`. `QCSF` itself has no default trial count (`max_trials`
+#: is a plain constructor argument) -- this is a recommendation, not an
+#: enforced default. Simulated-observer validation
+#: (`tests/procedures/test_qcsf.py::test_recovery_slow`, see also
+#: `docs/METHODS.md`'s qCSF section) measured the plug-in AULCSF estimate's
+#: bias at about -0.06 to -0.08 log units at 100 trials (consistent with
+#: Lesmes et al. 2010's report of small residual bias after ~100 trials).
+#: A pooled sweep of 450 simulated runs per trial count found bias of
+#: -0.039 +/- 0.007 (SEM) at 300 trials and -0.033 +/- 0.007 at 500 --
+#: comfortably under the project's |bias| < 0.05 target on average, though
+#: single-run-to-single-run variability remains high (SD ~0.16) regardless
+#: of trial count. Finer stimulus/parameter grids were investigated as an
+#: alternative fix and did not reliably reduce bias beyond sampling noise,
+#: so this is a trial-count recommendation, not a grid-resolution one.
+RECOMMENDED_MIN_TRIALS = 300
+
 
 def log_contrast_sensitivity(
     spatial_frequency_cpd: np.ndarray | float,

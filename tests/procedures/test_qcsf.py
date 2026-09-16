@@ -9,7 +9,12 @@ import numpy as np
 import pytest
 
 from vpsych.core.observers import CSFObserver
-from vpsych.core.procedures.qcsf import DEFAULT_PSYCHOMETRIC_SLOPE, QCSF, log_contrast_sensitivity
+from vpsych.core.procedures.qcsf import (
+    DEFAULT_PSYCHOMETRIC_SLOPE,
+    QCSF,
+    RECOMMENDED_MIN_TRIALS,
+    log_contrast_sensitivity,
+)
 
 TRUE_PARAMS = {
     "peak_gain_log10": 1.6,
@@ -133,17 +138,30 @@ def test_recovery_fast() -> None:
 
 @pytest.mark.slow
 def test_recovery_slow() -> None:
-    """AULCSF within 0.1 log units, averaged over runs, 100 trials each (per the plan)."""
+    """AULCSF bias, averaged over runs, at the recommended trial count.
+
+    Measured bias at 100 trials was about -0.06 to -0.08 (matching Lesmes et
+    al. 2010's report of a small residual bias after ~100 trials), which did
+    not reliably improve with finer grids (see docs/METHODS.md's qCSF
+    section for the investigation and numbers). A pooled sweep of 450
+    simulated runs at RECOMMENDED_MIN_TRIALS (300) measured bias of
+    -0.039 +/- 0.007 (SEM) -- comfortably under the project's |bias| < 0.05
+    target on average. This test's own n_reps is much smaller (for runtime),
+    so its bound is intentionally looser than 0.05 to avoid flaking on
+    ordinary sampling variation (single-run AULCSF error has SD ~0.16
+    regardless of trial count) while still catching a much larger,
+    genuinely-broken bias.
+    """
     obs = _true_observer()
     rng = np.random.default_rng(3)
     true_aulcsf = _true_aulcsf()
     diffs = []
     n_reps = 150
     for _ in range(n_reps):
-        qcsf = _make_qcsf(max_trials=100)
+        qcsf = _make_qcsf(max_trials=RECOMMENDED_MIN_TRIALS)
         _run(qcsf, obs, rng)
         diffs.append(qcsf.estimate().value - true_aulcsf)
-    assert abs(float(np.mean(diffs))) < 0.1
+    assert abs(float(np.mean(diffs))) < 0.08
 
 
 def test_estimate_before_any_trials_raises() -> None:

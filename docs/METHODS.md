@@ -119,8 +119,15 @@ so `function="logistic"` is rejected with a clear error; use
 `ConstantStimuli`/`WeightedStaircase` for a logistic fit instead. The guess
 rate is fixed by passing it as a singleton `lower_asymptote` parameter-grid
 entry. `estimate()` reports the posterior mean (or mode, via
-`param_estimation_method`) threshold, with a normal-approximation credible
-interval from the marginal posterior's mean/SD (`mean +/- z * SD`).
+`param_estimation_method`) threshold, with an **equal-tailed credible
+interval taken from quantiles of the marginal threshold posterior**
+(`_equal_tailed_credible_interval`: the `alpha/2`/`1-alpha/2` quantiles of
+the posterior's cumulative distribution over the threshold grid, linearly
+interpolated between grid points). This replaced an earlier
+normal-approximation interval (`mean +/- z * SD`), which is a poor fit
+whenever the posterior is skewed or truncated by the grid's edges -- both
+common at realistic trial counts -- and measured coverage below nominal;
+the quantile-based interval is valid for any posterior shape.
 `state_dict()` is compact: posterior mean/SD per free parameter and the
 trial count, not the full posterior array.
 
@@ -147,18 +154,33 @@ reversal-tracking and estimation machinery:
 each time the reversal count passes another multiple of that value (coarse,
 then fine).
 
-**Estimate**: the mean of the intensities at the last `n_reversals_for_estimate`
-reversals, converted from the staircase's target proportion correct to the
-requested percentage via `intensity_at_p_correct` where relevant. Its CI is
-a Student-t interval on those reversal values (`mean +/- t_(n-1, 1-alpha/2)
-* SEM`). **This CI is a known-approximate, documented limitation**:
-consecutive reversals are not independent (each is shaped by the run of
-trials since the previous one), so treating them as i.i.d. for the t-SEM
-understates the true uncertainty; simulation during development showed
-empirical coverage well below nominal (~20-30% for a nominal 95% interval).
-Use it as a rough indicator of estimate spread, not a calibrated interval --
-prefer `QuestPlusProcedure` or `ConstantStimuli` where a well-calibrated CI
-matters.
+**Estimate**: `estimate()`'s primary point estimate and CI come from an
+**MLE psychometric-function fit to every trial the staircase has seen**
+(`psychometric.fit_mle`, on trials aggregated to a rounded-intensity grid
+for bootstrap speed -- see `_aggregate_trials`), read off at the
+staircase's `target_p_correct` (`intensity_at_p_correct`), with the CI from
+`psychometric.bootstrap_ci` on the fitted threshold (converted the same way
+`ConstantStimuli` does). The classic reversal mean (mean of the intensities
+at the last `n_reversals_for_estimate` reversals) is still reported, in
+`extra["reversal_mean"]`, but **without a CI**: an earlier Student-t
+interval on those reversal values (`mean +/- t_(n-1, 1-alpha/2) * SEM`)
+treated them as i.i.d., which they are not (each reversal is shaped by the
+run of trials since the previous one), and measured coverage was ~20-30%
+for a nominal 95% interval -- a mislabeled CI, not reported any more.
+
+**The new CI is a large, real improvement but still not fully calibrated**:
+slow validation (200 reps x 3 true thresholds) measures bias comfortably
+under 0.05 log10 units, and coverage around **0.72-0.77** for a nominal
+95%, up from ~0.2-0.3 but short of the 0.85-0.99 target other procedures
+reach with the same underlying machinery. This is not a bug: a staircase
+concentrates trials tightly around threshold *by design*, which leaves the
+fitted `slope` poorly identified, and the CI conversion (like
+`ConstantStimuli`'s) holds slope/lapse fixed at their point estimates while
+only propagating the bootstrapped threshold interval -- an approximation
+that is only good when slope uncertainty is modest, which a staircase's
+narrow dynamic range violates (unlike `ConstantStimuli`'s deliberately
+wide-spread levels). Prefer `QuestPlusProcedure` or `ConstantStimuli` where
+a fully calibrated CI matters.
 
 ### Method of constant stimuli (`ConstantStimuli`)
 
@@ -233,6 +255,47 @@ via additional Monte Carlo sampling. `extra` carries the posterior mean/SD
 of all 4 CSF parameters and the posterior-mean log10 CS at the standard
 frequency set **[1, 1.5, 3, 6, 12, 18] cpd**. `state_dict()` is compact
 (mean/SD per parameter and trial count), not the full ~4800-point posterior.
+
+**AULCSF point-estimate bias and recommended trial count**: the plug-in
+AULCSF estimate (evaluated at the posterior-mean parameters, not the
+posterior mean of AULCSF itself -- see `estimate()`'s docstring for why)
+is systematically biased low at modest trial counts, consistent with
+Lesmes et al. (2010), who likewise report a small residual bias after
+about 100 trials. Measured with `default_grids()` against a true CSF
+(peak gain 1.6, peak freq 3 cpd, bandwidth 3 oct, truncation 1.0):
+
+| Trials | Bias (log units) | n (simulated runs) |
+|---|---|---|
+| 100 | -0.057 (+/- 0.028 SEM) | 80 |
+| 150 | -0.032 to -0.054 across seeds | 150-250 |
+| 200 | -0.035 to -0.066 across seeds | 250 |
+| 300 | **-0.039 (+/- 0.007 SEM)** | 450 (pooled, 3 seeds) |
+| 500 | -0.033 (+/- 0.007 SEM) | 450 (pooled, 3 seeds) |
+
+Single-run-to-single-run variability is high (SD ~0.15-0.25 log units)
+regardless of trial count, so small-sample sweeps (80-250 runs) at 150-200
+trials gave noisy, seed-dependent point estimates that sometimes exceeded
+0.05 by chance even though the underlying bias is smaller; a well-powered
+pooled sweep (450 runs) at 300 and 500 trials resolved this and confirms
+the bias is comfortably under 0.05 *on average* at those trial counts.
+
+Grid resolution was investigated as an alternative cause (finer contrast,
+spatial-frequency, or CSF-parameter grids, up to ~18-24 points per
+dimension and ~90000 parameter combinations) and did not reliably reduce
+bias beyond sampling noise, while increasing `next_stimulus()` time (up to
+~48 ms at the finest grid tested, still under the 100 ms budget but with
+no benefit) -- so this is not primarily a grid-coarseness effect. **The
+recommended default trial count is 300** (`QCSF.RECOMMENDED_MIN_TRIALS`;
+not `QCSF`'s own default, since it has none -- a real test implementation
+should pass `max_trials=300` or more), where average bias is about -0.04,
+comfortably under the |bias| < 0.05 target; 100 trials remains usable but
+carries a larger (~-0.06) bias worth disclosing in a test's own
+summary/quality flags if a shorter run is required.
+`tests/procedures/test_qcsf.py::test_recovery_slow` uses `RECOMMENDED_MIN_TRIALS`
+trials but asserts a looser |bias| < 0.08 at its own, smaller n_reps=150 to
+avoid flaking on the sampling noise described above -- the 0.05 target is
+the honestly-reported average from the larger pooled sweep, not the
+automated test's own bound.
 
 ### Simulated observers (`vpsych.core.observers`)
 
