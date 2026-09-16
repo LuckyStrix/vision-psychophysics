@@ -18,10 +18,12 @@ def test_rebuild_catalog_indexes_session(tmp_path: Path) -> None:
     assert sessions[0]["session_id"] == sid
     assert sessions[0]["status"] == "complete"
     assert sessions[0]["calibration_grade"] == cal.luminance_grade
+    assert sessions[0]["color_grade"] == cal.color_grade
 
     history = catalog.task_history(pid, "dummy_test", "OD", tmp_path)
     assert len(history) == 1
     assert history[0]["session_id"] == sid
+    assert history[0]["color_grade"] == cal.color_grade
 
 
 def test_index_session_incremental(tmp_path: Path) -> None:

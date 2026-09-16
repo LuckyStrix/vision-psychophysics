@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_utc TEXT,
     calibration_hash TEXT NOT NULL,
     calibration_grade TEXT,
+    color_grade TEXT,
     PRIMARY KEY (participant_id, session_id)
 );
 
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS test_summaries (
     catch_lapse_rate REAL,
     flags TEXT NOT NULL,
     calibration_grade TEXT,
+    color_grade TEXT,
     analysis_version TEXT,
     started_utc TEXT NOT NULL,
     PRIMARY KEY (participant_id, session_id, task_id, eye, run)
@@ -84,12 +86,13 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
-def _calibration_grade_for(root: Path, calibration_hash: str) -> str | None:
+def _calibration_grades_for(root: Path, calibration_hash: str) -> tuple[str | None, str | None]:
+    """Return `(luminance_grade, color_grade)` for a calibration hash, or `(None, None)`."""
     try:
         calibration = dataset.load_calibration(calibration_hash, root)
     except (FileNotFoundError, ValueError):
-        return None
-    return calibration.luminance_grade
+        return None, None
+    return calibration.luminance_grade, calibration.color_grade
 
 
 def index_session(
@@ -119,7 +122,7 @@ def index_session(
         session_info = SessionInfo.model_validate_json(
             session_json_path.read_text(encoding="utf-8")
         )
-        grade = _calibration_grade_for(root, session_info.calibration_hash)
+        grade, color_grade = _calibration_grades_for(root, session_info.calibration_hash)
 
         conn.execute(
             "DELETE FROM sessions WHERE participant_id = ? AND session_id = ?",
@@ -133,8 +136,8 @@ def index_session(
             """
             INSERT INTO sessions
                 (session_id, participant_id, status, started_utc, ended_utc,
-                 calibration_hash, calibration_grade)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 calibration_hash, calibration_grade, color_grade)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -144,6 +147,7 @@ def index_session(
                 session_info.ended_utc.isoformat() if session_info.ended_utc else None,
                 session_info.calibration_hash,
                 grade,
+                color_grade,
             ),
         )
 
@@ -161,8 +165,8 @@ def index_session(
                     INSERT OR REPLACE INTO test_summaries
                         (participant_id, session_id, task_id, eye, run, value, ci_low, ci_high,
                          ci_level, units, n_trials, n_catch, catch_lapse_rate, flags,
-                         calibration_grade, analysis_version, started_utc)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         calibration_grade, color_grade, analysis_version, started_utc)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         participant_id,
@@ -180,6 +184,7 @@ def index_session(
                         summary.catch_lapse_rate,
                         json.dumps([f.code for f in summary.quality_flags]),
                         grade,
+                        color_grade,
                         summary.analysis_version,
                         session_info.started_utc.isoformat(),
                     ),
@@ -265,14 +270,15 @@ def sessions_for_participant(
     Returns:
         A list of dicts (one per session), each with keys `session_id`,
         `status`, `started_utc`, `ended_utc`, `calibration_hash`,
-        `calibration_grade`.
+        `calibration_grade` (luminance grade), `color_grade`.
     """
     root = root or paths.data_root()
     conn = connect(root)
     try:
         rows = conn.execute(
             """
-            SELECT session_id, status, started_utc, ended_utc, calibration_hash, calibration_grade
+            SELECT session_id, status, started_utc, ended_utc, calibration_hash,
+                   calibration_grade, color_grade
             FROM sessions
             WHERE participant_id = ?
             ORDER BY started_utc DESC
@@ -301,8 +307,8 @@ def task_history(
         A list of dicts (one per test run), ordered by `started_utc`
         ascending, each with keys `session_id`, `run`, `value`, `ci_low`,
         `ci_high`, `ci_level`, `units`, `flags` (a JSON-encoded list of
-        quality-flag codes), `calibration_grade`, `analysis_version`,
-        `started_utc`.
+        quality-flag codes), `calibration_grade` (luminance grade),
+        `color_grade`, `analysis_version`, `started_utc`.
     """
     root = root or paths.data_root()
     conn = connect(root)
@@ -310,7 +316,7 @@ def task_history(
         rows = conn.execute(
             """
             SELECT session_id, run, value, ci_low, ci_high, ci_level, units, flags,
-                   calibration_grade, analysis_version, started_utc
+                   calibration_grade, color_grade, analysis_version, started_utc
             FROM test_summaries
             WHERE participant_id = ? AND task_id = ? AND eye = ?
             ORDER BY started_utc ASC
