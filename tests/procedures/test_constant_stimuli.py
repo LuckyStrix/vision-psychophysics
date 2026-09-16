@@ -52,6 +52,21 @@ def _make_cs(
     )
 
 
+def test_state_dict_works_before_any_update() -> None:
+    """The trial loop calls state_dict() on every trial, including practice
+    trials before the first update() -- must never raise."""
+    rng = np.random.default_rng(11)
+    cs = _make_cs(-1.0, rng, n_reps=5, n_boot=20)
+    state = cs.state_dict()
+    json.dumps(state)
+    assert state["n_trials"] == 0
+    assert state["finished"] is False
+    # estimate() legitimately cannot produce a fit with zero data -- it
+    # should fail loudly and cleanly (RuntimeError), not crash obscurely.
+    with pytest.raises(RuntimeError, match="before any trials"):
+        cs.estimate()
+
+
 def test_runs_expected_number_of_trials_and_finishes() -> None:
     fn = _true_function(-1.0)
     obs = PsychometricObserver(fn, n_afc=2)

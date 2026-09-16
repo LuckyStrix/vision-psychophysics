@@ -81,6 +81,20 @@ def _true_function(threshold: float) -> PsychometricFunction:
     )
 
 
+def test_state_dict_works_before_any_update() -> None:
+    """The trial loop calls state_dict() on every trial, including practice
+    trials before the first update() -- must never raise."""
+    sc = _make_weighted(start=-0.3)
+    state = sc.state_dict()
+    json.dumps(state)
+    assert state["n_trials"] == 0
+    assert state["n_reversals"] == 0
+    # estimate() before any data is also well-defined here (falls back to
+    # the starting intensity as a degenerate 1-point estimate).
+    est = sc.estimate()
+    assert est.value == pytest.approx(-0.3)
+
+
 def test_weighted_staircase_finishes_within_reversal_budget() -> None:
     fn = _true_function(-1.0)
     obs = PsychometricObserver(fn, n_afc=2)
