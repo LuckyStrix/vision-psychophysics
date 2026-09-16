@@ -25,7 +25,8 @@ It must implement every abstract method:
 ```python
 @register_test
 class VisualAcuityTest(PsychophysicalTest):
-    spec = TestSpec(...)                     # class attribute, see below
+    spec = TestSpec(...)  # class attribute, see below
+
     def __init__(self, params, display, calibration, rng): ...
     def make_procedure(self) -> AdaptiveProcedure | MultiParamProcedure: ...
     def make_catch_trial_intensity(self) -> float: ...
@@ -166,7 +167,7 @@ Under `SimulatedBackend` there is no real display to measure timing from
 refresh) rather than trying to time anything:
 
 ```python
-frame_intervals_s=[1.0 / 60.0] * max(timeline.stimulus_frames, 1)
+frame_intervals_s = [1.0 / 60.0] * max(timeline.stimulus_frames, 1)
 ```
 
 ## 6. Lazy `psychopy` imports
@@ -180,8 +181,9 @@ actually needs a window, never at module import time:
 ```python
 def build_stimuli(self, win: Any) -> dict[str, Any]:
     if win is None:
-        return {}                    # SimulatedBackend: nothing to build
-    from psychopy import visual      # lazy -- not at module top
+        return {}  # SimulatedBackend: nothing to build
+    from psychopy import visual  # lazy -- not at module top
+
     ...
 ```
 
