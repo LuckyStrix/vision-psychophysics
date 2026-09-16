@@ -121,6 +121,15 @@ class TestSpec(BaseModel):
         params_model: The pydantic model class describing this test's
             configurable parameters (e.g. starting intensity, number of
             trials); instantiated per `SessionPlan.PlannedTest.params`.
+        hidden: If `True`, this test is registered and fully runnable (via
+            `get_test`/the runner) but excluded from any participant-facing
+            listing (the test-catalog UI, session builder). Not part of the
+            Phase 0 freeze; added (default `False`, so every real test is
+            shown unless it opts out) for test-only fixture/example tests
+            that need to be genuinely registered -- runnable end to end by
+            the real runner, not just importable -- without ever being
+            selectable by a real participant. See
+            `vpsych.tests_catalog._example` for the canonical use.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -145,6 +154,9 @@ class TestSpec(BaseModel):
     citations: list[str] = Field(default_factory=list, description="Literature citations.")
     params_model: type[BaseModel] = Field(
         description="Pydantic model class for this test's params."
+    )
+    hidden: bool = Field(
+        default=False, description="Registered and runnable, but excluded from UI listings."
     )
 
 
@@ -546,3 +558,49 @@ def all_tests() -> list[type[PsychophysicalTest]]:
         registration order.
     """
     return list(_REGISTRY.values())
+
+
+def visible_tests() -> list[type[PsychophysicalTest]]:
+    """Return every registered test class whose `spec.hidden` is `False`.
+
+    The set a participant-facing test-catalog UI/session builder should
+    list; `get_test`/the runner still accept a hidden test's id directly
+    (hidden only means "not listed", not "not runnable").
+
+    Returns:
+        A list of registered, non-hidden `PsychophysicalTest` subclasses,
+        in registration order.
+    """
+    return [cls for cls in all_tests() if not cls.spec.hidden]
+
+
+def discover_tests() -> list[type[PsychophysicalTest]]:
+    """Import every direct submodule/subpackage of `vpsych.tests_catalog` and return `all_tests()`.
+
+    Each real test lives in its own subpackage of `tests_catalog` and
+    registers itself via `@register_test` purely as an import-time side
+    effect -- nothing imports those subpackages automatically otherwise, so
+    a fresh process that calls `get_test(task_id)` before anything has
+    imported that test's module finds an empty (or incomplete) registry.
+    This closes that gap: call it once, early, in any entry point that
+    looks up tests by id in a process that may not have imported them yet
+    (`vpsych.runner.__main__.run_session`, `vpsych.data.reanalyze.reanalyze_session`,
+    the future PySide6 app's test catalog).
+
+    Safe to call repeatedly (subsequent imports of an already-imported
+    module are cheap no-ops per Python's own import cache) and safe to call
+    even with zero test subpackages present yet (Phase 2, returns `[]`).
+
+    Returns:
+        `all_tests()`, after every discoverable submodule has been imported.
+    """
+    import importlib
+    import pkgutil
+
+    import vpsych.tests_catalog as _pkg
+
+    for module_info in pkgutil.iter_modules(_pkg.__path__, prefix=f"{_pkg.__name__}."):
+        if module_info.name.rsplit(".", 1)[-1] == "base":
+            continue  # this module itself; nothing to gain re-importing it
+        importlib.import_module(module_info.name)
+    return all_tests()

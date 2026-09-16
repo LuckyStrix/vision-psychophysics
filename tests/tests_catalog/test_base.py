@@ -14,11 +14,14 @@ import numpy as np
 from pydantic import BaseModel
 
 from vpsych.core.procedures.base import AdaptiveProcedure
+from vpsych.tests_catalog import base as catalog_base
 from vpsych.tests_catalog.base import (
     PresentedTrial,
     PsychophysicalTest,
     TestRequirements,
     TestSpec,
+    discover_tests,
+    visible_tests,
 )
 
 
@@ -133,3 +136,28 @@ def test_simulated_response_missing_correct_response_key_returns_none() -> None:
     t = _test()
     rng = np.random.default_rng(0)
     assert t.simulated_response(True, {}, rng) is None
+
+
+def test_hidden_defaults_false() -> None:
+    assert _MinimalTest.spec.hidden is False
+
+
+def test_visible_tests_excludes_hidden() -> None:
+    class _HiddenTest(_MinimalTest):
+        spec = _MinimalTest.spec.model_copy(update={"id": "minimal_hidden_test", "hidden": True})
+
+    catalog_base._REGISTRY["minimal_hidden_test"] = _HiddenTest
+    try:
+        visible_ids = {cls.spec.id for cls in visible_tests()}
+        all_ids = {cls.spec.id for cls in catalog_base.all_tests()}
+        assert "minimal_hidden_test" in all_ids
+        assert "minimal_hidden_test" not in visible_ids
+    finally:
+        catalog_base._REGISTRY.pop("minimal_hidden_test", None)
+
+
+def test_discover_tests_is_idempotent_and_returns_all_tests() -> None:
+    before = discover_tests()
+    after = discover_tests()
+    assert before == after
+    assert before == catalog_base.all_tests()

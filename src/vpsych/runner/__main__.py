@@ -464,6 +464,7 @@ def run_session(
     *,
     writer_factory: Callable[[str, str, SessionInfo, Path], Writer] = _default_writer_factory,
     simulated_observer: SimulatedObserver | None = None,
+    abort_after_trials: int | None = None,
 ) -> RunnerExitCode:
     """Run one full session per `args`, returning the process exit code.
 
@@ -487,6 +488,13 @@ def run_session(
             observer to drive `SimulatedBackend` with for any task not
             covered by `args.simulate_config`; if `None`, resolved from
             `args.simulate` via `parse_simulated_observer_spec`.
+        abort_after_trials: Only meaningful in `--simulate` mode: forwarded
+            to `vpsych.core.trial_loop.SimulatedBackend`'s constructor so
+            the session aborts partway through, deterministically, after
+            this many presented trials. Test-only support for exercising
+            the abort path (an interrupted session's data retained, status
+            `"incomplete"`/`"aborted"`) without needing OS signal timing on
+            a real subprocess; `None` (the default) never aborts this way.
 
     Returns:
         A `RunnerExitCode` value.
@@ -517,7 +525,13 @@ def run_session(
         # Resolve tests and check requirements against every planned test before
         # touching a display. Imported lazily to avoid a hard dependency on the
         # tests_catalog registry being populated at module import time.
-        from vpsych.tests_catalog.base import check_requirements, get_test
+        from vpsych.tests_catalog.base import check_requirements, discover_tests, get_test
+
+        # This is a fresh process (the runner is always launched as a subprocess):
+        # nothing has imported any real test's subpackage yet, so get_test() below
+        # would find an empty registry without this -- see discover_tests()'s
+        # docstring.
+        discover_tests()
 
         unmet: list[str] = []
         resolved_tests = []
@@ -564,7 +578,7 @@ def run_session(
                 else default_observer
             )
             assert initial_observer is not None  # guaranteed by the loop above
-            backend = SimulatedBackend(initial_observer)
+            backend = SimulatedBackend(initial_observer, abort_after_trials=abort_after_trials)
             measured_refresh_hz = calibration.geometry.refresh_hz
         else:
             backend = PsychoPyBackend(calibration.geometry)
