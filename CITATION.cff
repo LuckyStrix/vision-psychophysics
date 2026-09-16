@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "vision-psychophysics (vpsych)"
+abstract: >-
+  A local, calibrated visual psychophysics test suite for measuring visual
+  acuity, contrast sensitivity, color discrimination, motion coherence, and
+  temporal and hyperacuity thresholds.
+authors:
+  - family-names: Laubach
+    given-names: Carter
+license: GPL-3.0-or-later
+repository-code: "https://github.com/LuckyStrix/vision-psychophysics"
+version: 0.1.0
+date-released: "2026-09-16"
+type: software
