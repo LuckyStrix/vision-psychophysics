@@ -10,6 +10,7 @@ headless.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -114,3 +115,74 @@ def summarize_frame_intervals(
         dropped_fraction=dropped_fraction,
         expected_ms=expected_ms,
     )
+
+
+def measure_refresh(win: Any, n_frames: int = 120) -> float:
+    """Measure a live PsychoPy window's actual refresh rate, in hertz.
+
+    Lazily imports nothing itself (``win`` is already a live
+    ``psychopy.visual.Window`` supplied by the caller, per the project's
+    rule that ``psychopy`` is imported lazily only where a window is
+    actually used); this function's own logic is a thin, unit-testable-by-
+    mocking wrapper around ``win.getActualFrameRate``, PsychoPy's standard
+    refresh-measurement routine (it flips ``nIdentical``/``nMaxFrames``
+    times and fits the reported rate), with a fallback to timing
+    ``win.frameIntervals`` directly if the window does not expose
+    ``getActualFrameRate``.
+
+    Args:
+        win: A live ``psychopy.visual.Window`` (or any object exposing a
+            compatible ``getActualFrameRate`` or ``frameIntervals``
+            attribute, e.g. a test double).
+        n_frames: Number of frames to sample.
+
+    Returns:
+        The measured refresh rate, in hertz.
+
+    Raises:
+        RuntimeError: If the refresh rate could not be measured (the
+            window reported `None`, or fewer than 2 recorded frame
+            intervals were available as a fallback).
+    """
+    get_rate = getattr(win, "getActualFrameRate", None)
+    if callable(get_rate):
+        rate = get_rate(nIdentical=n_frames, nMaxFrames=n_frames * 4, nWarmUpFrames=n_frames // 4)
+        if rate is not None and rate > 0:
+            return float(rate)
+
+    intervals = getattr(win, "frameIntervals", None)
+    if intervals and len(intervals) >= 2:
+        mean_interval_s = float(sum(intervals)) / len(intervals)
+        if mean_interval_s > 0:
+            return 1.0 / mean_interval_s
+
+    raise RuntimeError(
+        "Could not measure refresh rate: win.getActualFrameRate() returned None/non-positive "
+        "and no usable win.frameIntervals fallback was available."
+    )
+
+
+def refresh_matches(measured_hz: float, expected_hz: float, tol: float = 0.01) -> bool:
+    """Check whether a measured refresh rate agrees with an expected (calibration) rate.
+
+    Used by the runner to abort a session (``RunnerExitCode.REFRESH_MISMATCH``)
+    when the display is not running at the refresh rate its active
+    calibration assumes, per the plan: "abort if it differs from the
+    calibration by more than 1%."
+
+    Args:
+        measured_hz: The refresh rate actually measured this run (see
+            :func:`measure_refresh`), in hertz.
+        expected_hz: The refresh rate recorded in the active calibration's
+            display geometry, in hertz.
+        tol: Maximum allowed relative difference, e.g. ``0.01`` for 1%.
+
+    Returns:
+        `True` if ``abs(measured_hz - expected_hz) / expected_hz <= tol``.
+
+    Raises:
+        ValueError: If ``expected_hz`` is not positive.
+    """
+    if expected_hz <= 0:
+        raise ValueError(f"expected_hz must be positive, got {expected_hz}")
+    return abs(measured_hz - expected_hz) / expected_hz <= tol
