@@ -1,0 +1,208 @@
+"""Scientific validation and unit tests for vpsych.core.procedures.qcsf."""
+
+from __future__ import annotations
+
+import json
+import time
+
+import numpy as np
+import pytest
+
+from vpsych.core.observers import CSFObserver
+from vpsych.core.procedures.qcsf import DEFAULT_PSYCHOMETRIC_SLOPE, QCSF, log_contrast_sensitivity
+
+TRUE_PARAMS = {
+    "peak_gain_log10": 1.6,
+    "peak_freq_cpd": 3.0,
+    "bandwidth_octaves": 3.0,
+    "low_freq_truncation_log10": 1.0,
+}
+LAPSE = 0.02
+
+
+def _true_observer() -> CSFObserver:
+    return CSFObserver(n_afc=2, slope=DEFAULT_PSYCHOMETRIC_SLOPE, lapse_rate=LAPSE, **TRUE_PARAMS)
+
+
+def _true_aulcsf(f_lo: float = 1.0, f_hi: float = 18.0, n_pts: int = 200) -> float:
+    log10_f = np.linspace(np.log10(f_lo), np.log10(f_hi), n_pts)
+    f = 10.0**log10_f
+    log_cs = log_contrast_sensitivity(f, **TRUE_PARAMS)
+    return float(np.trapezoid(log_cs, x=log10_f))
+
+
+def _make_qcsf(max_trials: int = 100) -> QCSF:
+    grids = QCSF.default_grids()
+    return QCSF(
+        **grids,
+        guess_rate=0.5,
+        lapse_rate=LAPSE,
+        max_trials=max_trials,
+        psychometric_slope=DEFAULT_PSYCHOMETRIC_SLOPE,
+    )
+
+
+def _run(qcsf: QCSF, obs: CSFObserver, rng: np.random.Generator) -> None:
+    while not qcsf.finished:
+        stim = qcsf.next_stimulus()
+        resp = obs.respond({**stim, "correct_alternative": 0}, rng)
+        qcsf.update(stim, resp == 0)
+
+
+def test_constructor_rejects_empty_grids() -> None:
+    grids = QCSF.default_grids()
+    bad = dict(grids)
+    bad["contrast_values"] = []
+    with pytest.raises(ValueError, match="non-empty"):
+        QCSF(**bad, guess_rate=0.5)
+
+
+def test_finishes_at_max_trials() -> None:
+    qcsf = _make_qcsf(max_trials=20)
+    obs = _true_observer()
+    rng = np.random.default_rng(0)
+    _run(qcsf, obs, rng)
+    assert qcsf.finished
+    assert qcsf.state_dict()["n_trials"] == 20
+
+
+def test_next_stimulus_is_fast() -> None:
+    """Per-trial stimulus selection must run in well under 100 ms on a laptop
+    (see QCSF.default_grids() docstring: 100 stimuli x 4800 params)."""
+    qcsf = _make_qcsf(max_trials=60)
+    obs = _true_observer()
+    rng = np.random.default_rng(1)
+    times_ms = []
+    while not qcsf.finished:
+        t0 = time.perf_counter()
+        stim = qcsf.next_stimulus()
+        t1 = time.perf_counter()
+        times_ms.append((t1 - t0) * 1000)
+        resp = obs.respond({**stim, "correct_alternative": 0}, rng)
+        qcsf.update(stim, resp == 0)
+    assert max(times_ms) < 100.0
+
+
+def test_recovery_fast() -> None:
+    # qCSF trials are cheap (~1 ms each, see test_next_stimulus_is_fast), so
+    # even this "fast" smoke test can afford enough reps to keep the mean
+    # difference's sampling noise reasonably small -- single-run AULCSF
+    # error is fairly high-variance (a 4-parameter joint fit from binary
+    # responses), so this checks it isn't grossly, systematically wrong
+    # rather than tightly bounding it (see the slow variant for that).
+    obs = _true_observer()
+    rng = np.random.default_rng(2)
+    true_aulcsf = _true_aulcsf()
+    diffs = []
+    for _ in range(8):
+        qcsf = _make_qcsf(max_trials=60)
+        _run(qcsf, obs, rng)
+        diffs.append(qcsf.estimate().value - true_aulcsf)
+    assert abs(float(np.mean(diffs))) < 0.3
+
+
+@pytest.mark.slow
+def test_recovery_slow() -> None:
+    """AULCSF within 0.1 log units, averaged over runs, 100 trials each (per the plan)."""
+    obs = _true_observer()
+    rng = np.random.default_rng(3)
+    true_aulcsf = _true_aulcsf()
+    diffs = []
+    n_reps = 80
+    for _ in range(n_reps):
+        qcsf = _make_qcsf(max_trials=100)
+        _run(qcsf, obs, rng)
+        diffs.append(qcsf.estimate().value - true_aulcsf)
+    assert abs(float(np.mean(diffs))) < 0.1
+
+
+def test_estimate_before_any_trials_raises() -> None:
+    qcsf = _make_qcsf(max_trials=10)
+    with pytest.raises(RuntimeError, match="before any trials"):
+        qcsf.estimate()
+
+
+def test_estimate_ci_contains_point_and_extra_fields() -> None:
+    qcsf = _make_qcsf(max_trials=40)
+    obs = _true_observer()
+    rng = np.random.default_rng(4)
+    _run(qcsf, obs, rng)
+    est = qcsf.estimate()
+    assert est.ci_low <= est.value <= est.ci_high
+    assert set(est.extra["posterior_mean"].keys()) == {
+        "peak_gain_log10cs",
+        "peak_freq_cpd",
+        "bandwidth_octaves",
+        "low_freq_truncation_log10",
+    }
+    assert set(est.extra["log_cs_at_frequencies_cpd"].keys()) == {
+        "1.0",
+        "1.5",
+        "3.0",
+        "6.0",
+        "12.0",
+        "18.0",
+    }
+
+
+def test_state_dict_is_compact_and_json_serializable() -> None:
+    qcsf = _make_qcsf(max_trials=20)
+    obs = _true_observer()
+    rng = np.random.default_rng(5)
+    _run(qcsf, obs, rng)
+    state = qcsf.state_dict()
+    json.dumps(state)
+    # Compact: mean/SD per parameter, not the full (4800-point) posterior grid.
+    assert set(state["posterior_mean"].keys()) == {
+        "peak_gain_log10cs",
+        "peak_freq_cpd",
+        "bandwidth_octaves",
+        "low_freq_truncation_log10",
+    }
+    json.dumps(qcsf.estimate().model_dump())
+
+
+def test_determinism_same_seed_same_trial_sequence() -> None:
+    obs = _true_observer()
+
+    def run(seed: int) -> list[dict[str, float]]:
+        rng = np.random.default_rng(seed)
+        qcsf = _make_qcsf(max_trials=30)
+        stimuli = []
+        while not qcsf.finished:
+            stim = qcsf.next_stimulus()
+            stimuli.append(stim)
+            resp = obs.respond({**stim, "correct_alternative": 0}, rng)
+            qcsf.update(stim, resp == 0)
+        return stimuli
+
+    seq1 = run(123)
+    seq2 = run(123)
+    assert seq1 == seq2
+
+
+def test_log_contrast_sensitivity_peaks_at_peak_frequency() -> None:
+    freqs = np.array([1.0, 3.0, 10.0])
+    log_cs = log_contrast_sensitivity(
+        freqs,
+        peak_gain_log10=1.5,
+        peak_freq_cpd=3.0,
+        bandwidth_octaves=3.0,
+        low_freq_truncation_log10=1.0,
+    )
+    assert log_cs[1] == pytest.approx(1.5)  # exactly at peak frequency
+    assert log_cs[1] > log_cs[0]
+    assert log_cs[1] > log_cs[2]
+
+
+def test_log_contrast_sensitivity_truncation_plateaus_low_frequencies() -> None:
+    # Deep low-frequency point: unclipped parabola would fall far below the
+    # truncation floor, so the truncated value should sit at the floor.
+    log_cs = log_contrast_sensitivity(
+        0.1,
+        peak_gain_log10=1.5,
+        peak_freq_cpd=3.0,
+        bandwidth_octaves=1.0,
+        low_freq_truncation_log10=0.5,
+    )
+    assert log_cs == pytest.approx(1.0, abs=1e-9)  # peak_gain - truncation = 1.5 - 0.5
