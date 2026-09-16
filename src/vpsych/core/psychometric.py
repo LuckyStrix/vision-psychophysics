@@ -31,8 +31,8 @@ from typing import Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
-from scipy import stats as _stats  # type: ignore[import-untyped]
-from scipy.optimize import minimize  # type: ignore[import-untyped]
+from scipy import stats as _stats
+from scipy.optimize import minimize
 
 PsychometricFamily = Literal["weibull", "logistic", "norm_cdf"]
 IntensityScale = Literal["log10", "linear"]

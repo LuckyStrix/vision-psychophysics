@@ -32,7 +32,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import numpy as np
-from scipy import stats as _stats  # type: ignore[import-untyped]
+from scipy import stats as _stats
 
 from vpsych.core.procedures.base import ThresholdEstimate
 

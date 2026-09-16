@@ -46,7 +46,7 @@ from typing import Any, Literal
 
 import numpy as np
 from questplus import QuestPlus
-from scipy import stats as _stats  # type: ignore[import-untyped]
+from scipy import stats as _stats
 
 from vpsych.core.procedures.base import ThresholdEstimate
 
