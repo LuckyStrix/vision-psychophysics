@@ -71,7 +71,7 @@ class Participant(BaseModel):
             callers are responsible for keeping this pseudonymous.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     participant_id: str = Field(
         pattern=r"^sub-[0-9]{4}$", description="Pseudonymous participant ID."
