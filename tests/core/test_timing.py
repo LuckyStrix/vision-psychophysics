@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from vpsych.core.timing import FrameTimingStats, summarize_frame_intervals
+from vpsych.core.timing import (
+    FrameTimingStats,
+    measure_refresh,
+    refresh_matches,
+    summarize_frame_intervals,
+)
 
 
 def test_empty_intervals() -> None:
@@ -79,3 +84,72 @@ def test_invalid_refresh_hz_raises() -> None:
 def test_invalid_drop_tolerance_raises() -> None:
     with pytest.raises(ValueError, match="drop_tolerance"):
         summarize_frame_intervals([0.01], refresh_hz=60.0, drop_tolerance=0.0)
+
+
+class _FakeWinWithFrameRate:
+    def __init__(self, rate: float | None) -> None:
+        self._rate = rate
+        self.calls: list[dict[str, int]] = []
+
+    def getActualFrameRate(  # noqa: N802 - mimics psychopy.visual.Window's real method name
+        self,
+        nIdentical: int = 10,  # noqa: N803 - mimics psychopy's real argument name
+        nMaxFrames: int = 100,  # noqa: N803 - mimics psychopy's real argument name
+        nWarmUpFrames: int = 10,  # noqa: N803 - mimics psychopy's real argument name
+    ) -> float | None:
+        self.calls.append(
+            {"nIdentical": nIdentical, "nMaxFrames": nMaxFrames, "nWarmUpFrames": nWarmUpFrames}
+        )
+        return self._rate
+
+
+class _FakeWinWithIntervalsOnly:
+    def __init__(self, intervals: list[float]) -> None:
+        self.frameIntervals = intervals
+
+
+def test_measure_refresh_uses_get_actual_frame_rate() -> None:
+    win = _FakeWinWithFrameRate(59.94)
+    assert measure_refresh(win, n_frames=120) == pytest.approx(59.94)
+    assert win.calls[0]["nIdentical"] == 120
+
+
+def test_measure_refresh_falls_back_to_frame_intervals() -> None:
+    win = _FakeWinWithFrameRate(None)
+    win.frameIntervals = [1 / 60.0] * 10  # type: ignore[attr-defined]
+    assert measure_refresh(win) == pytest.approx(60.0)
+
+
+def test_measure_refresh_no_get_actual_frame_rate_uses_intervals() -> None:
+    win = _FakeWinWithIntervalsOnly([1 / 120.0] * 20)
+    assert measure_refresh(win) == pytest.approx(120.0)
+
+
+def test_measure_refresh_raises_when_unmeasurable() -> None:
+    win = _FakeWinWithFrameRate(None)
+    with pytest.raises(RuntimeError):
+        measure_refresh(win)
+
+
+def test_measure_refresh_raises_on_empty_intervals() -> None:
+    win = _FakeWinWithIntervalsOnly([])
+    with pytest.raises(RuntimeError):
+        measure_refresh(win)
+
+
+@pytest.mark.parametrize(
+    ("measured", "expected", "tol", "matches"),
+    [
+        (60.0, 60.0, 0.01, True),
+        (60.5, 60.0, 0.01, True),  # 0.83% off, within 1%
+        (61.0, 60.0, 0.01, False),  # 1.67% off, outside 1%
+        (59.45, 60.0, 0.01, True),  # 0.92% off, within 1%
+    ],
+)
+def test_refresh_matches(measured: float, expected: float, tol: float, matches: bool) -> None:
+    assert refresh_matches(measured, expected, tol=tol) is matches
+
+
+def test_refresh_matches_invalid_expected_raises() -> None:
+    with pytest.raises(ValueError, match="expected_hz"):
+        refresh_matches(60.0, 0.0)
