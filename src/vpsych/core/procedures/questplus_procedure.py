@@ -46,11 +46,51 @@ from typing import Any, Literal
 
 import numpy as np
 from questplus import QuestPlus
-from scipy import stats as _stats
 
 from vpsych.core.procedures.base import ThresholdEstimate
 
 PsychometricFamily = Literal["weibull", "logistic", "norm_cdf"]
+
+
+def _equal_tailed_credible_interval(
+    values: np.ndarray, probs: np.ndarray, level: float
+) -> tuple[float, float]:
+    """Equal-tailed credible interval from a discretized marginal posterior.
+
+    Replaces a normal approximation (`mean +/- z * sd` on the posterior),
+    which is a poor fit whenever the marginal posterior is skewed or
+    truncated by the parameter grid's edges -- both common for QUEST+ with
+    realistic trial counts, and the reason the normal-approximation CI's
+    empirical coverage was measured well below its nominal level (see
+    `tests/procedures/test_questplus_procedure.py`). Instead this takes the
+    `alpha/2` and `1 - alpha/2` quantiles directly off the posterior's
+    (normalized) CDF over `values`, linearly interpolating between grid
+    points -- valid for any posterior shape, including skewed or
+    edge-truncated ones.
+
+    Args:
+        values: Sorted or unsorted grid values the posterior is defined
+            over (e.g. `QuestPlus.param_domain[key]`).
+        probs: Posterior probability mass at each of `values` (e.g.
+            `QuestPlus.marginal_posterior[key]`); need not already sum to
+            exactly 1 (renormalized here).
+        level: Nominal credible-interval coverage, e.g. `0.95`.
+
+    Returns:
+        `(ci_low, ci_high)`.
+    """
+    order = np.argsort(values)
+    v = values[order]
+    p = probs[order]
+    cdf = np.cumsum(p)
+    total = cdf[-1]
+    if total <= 0:
+        return float(v[0]), float(v[-1])
+    cdf = cdf / total
+    alpha = (1.0 - level) / 2.0
+    ci_low = float(np.interp(alpha, cdf, v))
+    ci_high = float(np.interp(1.0 - alpha, cdf, v))
+    return ci_low, ci_high
 
 
 class QuestPlusProcedure:
@@ -208,9 +248,7 @@ class QuestPlusProcedure:
         thr_vals = np.asarray(self._qp.param_domain[self._threshold_key], dtype=float)
         thr_probs = np.asarray(marginal[self._threshold_key], dtype=float)
         thr_sd = float(np.sqrt(np.sum(thr_probs * (thr_vals - threshold) ** 2)))
-        z = float(_stats.norm.ppf(0.5 + self.ci_level / 2))
-        ci_low = threshold - z * thr_sd
-        ci_high = threshold + z * thr_sd
+        ci_low, ci_high = _equal_tailed_credible_interval(thr_vals, thr_probs, self.ci_level)
 
         entropy = float(self._qp.entropy)
         return ThresholdEstimate(
@@ -226,6 +264,10 @@ class QuestPlusProcedure:
                 "threshold_posterior_sd": thr_sd,
                 "n_trials": self._n_trials,
                 "posterior_entropy": entropy if np.isfinite(entropy) else None,
+                "ci_method": (
+                    "equal-tailed credible interval from quantiles of the marginal "
+                    "threshold posterior (not a normal approximation)"
+                ),
             },
         )
 

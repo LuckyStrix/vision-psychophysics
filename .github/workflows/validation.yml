@@ -1,0 +1,38 @@
+name: Scientific validation
+
+# High-repetition scientific validation tests (bias/CI-coverage checks over
+# hundreds of simulated runs per procedure/test, see `pytest.ini_options`'
+# `slow` marker in pyproject.toml). Excluded from the fast `ci.yml` run (kept
+# under 60s) and instead run on a schedule plus on demand, so a slow
+# regression is still caught without slowing down every push/PR.
+on:
+  schedule:
+    # Every Monday at 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      # Scientific validation tests do many small SciPy/NumPy optimizations
+      # (bootstrap/MLE refits) per simulated run; OpenBLAS's own internal
+      # threading fights with that instead of helping, and has caused
+      # measured slowdowns/instability in this project's slow test suite.
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.10
+        run: uv python install 3.10
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: pytest -m slow
+        run: uv run pytest -m slow

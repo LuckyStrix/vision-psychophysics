@@ -45,12 +45,30 @@ Input keys (set by :class:`TrialLoop` before calling ``present``):
   :class:`SimulatedBackend`, or `None` for :class:`PsychoPyBackend`. A
   test's ``present()`` should, when this is not `None`, skip drawing to
   ``win`` (which is `None` in that case -- see
-  :attr:`PresentationBackend.win`) entirely and instead call
-  ``simulated_observer.respond(stimulus_params, rng)`` to obtain a
-  simulated response, fabricating a plausible ``stimulus_onset_s`` and
-  perfect ``frame_intervals_s`` (see :class:`SimulatedBackend` for a
-  worked example, used by this module's own tests via a minimal dummy
-  test).
+  :attr:`PresentationBackend.win`) entirely and obtain a simulated response
+  one of two documented ways (see
+  :class:`~vpsych.core.observers.SimulatedObserver`'s docstring for the
+  full contract):
+
+  1. ``simulated_observer.respond(stimulus_params, rng)`` directly, when
+     ``stimulus_params`` already carries the
+     ``"correct_alternative"``/``"alternatives"`` keys that convention
+     expects and this test's response representation matches what it
+     returns.
+  2. The decoupled, generally-preferred path:
+     ``correct = simulated_observer.decide_correct(stimulus_params, rng)``
+     (present on every built-in observer, though not required by the
+     `SimulatedObserver` Protocol itself) followed by
+     ``response = self.simulated_response(correct, stimulus_params, rng)``
+     (:meth:`~vpsych.tests_catalog.base.PsychophysicalTest.simulated_response`,
+     a concrete hook on the test base class with a sensible default a test
+     may override). This is the path to use whenever the observer's own
+     stimulus-dict convention (``"correct_alternative"``/``"alternatives"``)
+     doesn't fit a test's response shape.
+
+  Either way, ``present()`` fabricates a plausible ``stimulus_onset_s`` and
+  perfect ``frame_intervals_s`` (see :class:`SimulatedBackend` for a worked
+  example, used by this module's own tests via a minimal dummy test).
 
 Output keys (a test's ``present()`` must set before returning, since
 :class:`~vpsych.tests_catalog.base.PresentedTrial` itself does not carry
@@ -190,6 +208,17 @@ class SimulatedBackend(PresentationBackend):
         self._observer = observer
         self._abort_after_trials = abort_after_trials
         self._trials_presented = 0
+
+    def set_observer(self, observer: SimulatedObserver) -> None:
+        """Swap the active observer (e.g. per task, for a multi-task simulated session).
+
+        `vpsych.runner.__main__.run_session` calls this before each planned
+        test when `--simulate-config` gives different observer parameters
+        per task, since one `SimulatedBackend` instance is reused across an
+        entire session (`build_trial_ctx` reads whichever observer is
+        currently set).
+        """
+        self._observer = observer
 
     @property
     def win(self) -> Any:
@@ -506,9 +535,25 @@ class TrialLoop:
         ).write_atomic(self.status_path)
 
     def _present_and_build_record(
-        self, *, block: Block, is_catch: bool, trial_index: int, value: float | dict[str, float]
+        self,
+        *,
+        block: Block,
+        is_catch: bool,
+        trial_index: int,
+        value: float | dict[str, float],
+        updates_procedure: bool,
     ) -> tuple[TrialRecord, bool, list[float]]:
-        """Present one trial and build its `TrialRecord`. Returns (record, correct, intervals_s)."""
+        """Present one trial and build its `TrialRecord`. Returns (record, correct, intervals_s).
+
+        Args:
+            updates_procedure: Whether this trial should update `self.procedure`
+                (`True` only for non-catch main-block trials; `False` for the
+                demo trial, every practice trial, and every catch trial). The
+                update -- when `True` -- happens *before* `procedure_state` is
+                captured below, so `TrialRecord.procedure_state` is genuinely
+                the state "immediately after this trial" its docstring
+                promises, not the state the trial was presented under.
+        """
         trial_ctx = self.backend.build_trial_ctx(
             timeline=self.timeline,
             rng=self.rng,
@@ -521,6 +566,9 @@ class TrialLoop:
         stimulus_params = trial_ctx.get("stimulus_params", {})
         correct_response = trial_ctx.get("correct_response")
         correct = self.test.score(presented.response, stimulus_params)
+
+        if updates_procedure:
+            _update(self.procedure, value, correct)
 
         record = TrialRecord(
             participant_id=self.participant_id,
@@ -575,7 +623,11 @@ class TrialLoop:
         # Demo trial: shown, not recorded, not scored against the procedure.
         demo_value = self.test.make_catch_trial_intensity()
         self._present_and_build_record(
-            block="practice", is_catch=False, trial_index=0, value=demo_value
+            block="practice",
+            is_catch=False,
+            trial_index=0,
+            value=demo_value,
+            updates_procedure=False,
         )
 
         # Practice block: recorded, feedback shown, procedure NOT updated.
@@ -585,7 +637,11 @@ class TrialLoop:
                 return self._finish(trial_records, all_intervals, aborted=True, n_catch=0, n_main=0)
             practice_value = self.test.make_catch_trial_intensity()
             record, correct, intervals = self._present_and_build_record(
-                block="practice", is_catch=False, trial_index=i, value=practice_value
+                block="practice",
+                is_catch=False,
+                trial_index=i,
+                value=practice_value,
+                updates_procedure=False,
             )
             self.writer.append_trial(record)
             trial_records.append(record)
@@ -630,7 +686,11 @@ class TrialLoop:
                 value = _next_value(self.procedure)
 
             record, correct, intervals = self._present_and_build_record(
-                block="main", is_catch=is_catch, trial_index=main_trial_index, value=value
+                block="main",
+                is_catch=is_catch,
+                trial_index=main_trial_index,
+                value=value,
+                updates_procedure=not is_catch,
             )
             self.writer.append_trial(record)
             trial_records.append(record)
@@ -639,7 +699,6 @@ class TrialLoop:
             if is_catch:
                 n_catch += 1
             else:
-                _update(self.procedure, value, correct)
                 n_main_scored += 1
 
             last_was_catch = is_catch

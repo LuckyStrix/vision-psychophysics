@@ -93,8 +93,11 @@ def make_calibration(now: datetime | None = None) -> Calibration:
     )
 
 
-def make_session_plan(task_id: str = "dummy_test", eye: str = "OD") -> SessionPlan:
+def make_session_plan(
+    task_id: str = "dummy_test", eye: str = "OD", participant_id: str = "sub-0001"
+) -> SessionPlan:
     return SessionPlan(
+        participant_id=participant_id,
         tests=[PlannedTest(task_id=task_id, eye=eye, params={"n": 5}, viewing_distance_cm=57.0)],
         ordering="fixed",
         seed=42,

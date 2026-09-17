@@ -150,11 +150,11 @@ def test_recovery_slow(true_threshold: float) -> None:
             covered += 1
     assert abs(float(np.mean(biases))) < 0.05
     coverage = covered / n_reps
-    # Upper-bounded loosely (not tightly at ~0.99): the normal-approximation
-    # CI from the marginal posterior's mean/SD is occasionally a touch
-    # conservative (observed up to 0.995 during development) -- a wider
-    # interval than nominal is a benign, non-flaky outcome, unlike
-    # under-coverage, so it isn't penalized here.
+    # Upper-bounded loosely (not tightly at ~0.99): the equal-tailed credible
+    # interval taken from quantiles of the marginal threshold posterior can be
+    # a touch conservative at these trial counts -- a wider interval than
+    # nominal is a benign, non-flaky outcome, unlike under-coverage, so it
+    # isn't penalized tightly here.
     assert 0.88 <= coverage <= 1.0
 
 

@@ -33,9 +33,10 @@ because this is scientific instrumentation, not a typical app.
 - Python 3.10, managed with `uv`. `uv sync` to install, `uv run pytest` to
   test.
 - `uv run ruff check .` and `uv run ruff format --check .` must pass.
-- `uv run mypy src/vpsych/core src/vpsych/data` must pass (these packages
-  are checked strictly; other packages are checked more leniently while
-  interfaces settle).
+- `uv run mypy src/vpsych` must pass (CI checks the whole package;
+  `src/vpsych/core`/`src/vpsych/data` are checked strictly via
+  per-module overrides in `pyproject.toml`, other packages more leniently
+  while interfaces settle).
 - Add or update tests for anything you change under `core/` or `data/`.
 - Interfaces frozen in Phase 0 (display geometry, calibration models,
   procedure protocol, trial record, test-catalog plugin interface, data

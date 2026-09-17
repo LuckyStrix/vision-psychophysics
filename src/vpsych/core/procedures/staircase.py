@@ -29,12 +29,20 @@ the weighted-rule parameters.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
-from scipy import stats as _stats
 
 from vpsych.core.procedures.base import ThresholdEstimate
+from vpsych.core.psychometric import (
+    IntensityScale,
+    PsychometricFamily,
+    bootstrap_ci,
+    fit_mle,
+    intensity_at_p_correct,
+)
+
+_VALID_FAMILIES = ("weibull", "logistic", "norm_cdf")
 
 
 def transformed_rule_target_p(n_down: int) -> float:
@@ -56,6 +64,41 @@ def transformed_rule_target_p(n_down: int) -> float:
     if n_down < 1:
         raise ValueError("n_down must be >= 1")
     return float(0.5 ** (1.0 / n_down))
+
+
+def _aggregate_trials(
+    intensities: list[float], corrects: list[bool], ndigits: int = 3
+) -> tuple[list[float], list[int], list[int]]:
+    """Aggregate raw per-trial (intensity, correct) pairs into per-level binomial counts.
+
+    A staircase's presented intensity drifts continuously (shrinking step
+    sizes mean later trials cluster near threshold at slightly different
+    floats), so fitting one row per raw trial would give `fit_mle`/
+    `bootstrap_ci` hundreds of distinct "levels" -- correct, but needlessly
+    slow to refit thousands of times for a bootstrap CI. Rounding to
+    `ndigits` merges trials whose intensities are practically identical
+    (well below step size) into shared levels, which is a much smaller,
+    faster design matrix with no meaningful loss of information.
+
+    Args:
+        intensities: Presented intensity at each trial.
+        corrects: Whether each trial was scored correct.
+        ndigits: Decimal places to round intensities to before grouping.
+
+    Returns:
+        `(levels, n_correct, n_total)`, sorted by level.
+    """
+    levels: dict[float, list[int]] = {}
+    for x, c in zip(intensities, corrects, strict=True):
+        key = round(float(x), ndigits)
+        counts = levels.setdefault(key, [0, 0])
+        counts[0] += 1
+        if c:
+            counts[1] += 1
+    xs = sorted(levels)
+    n_total = [levels[x][0] for x in xs]
+    n_correct = [levels[x][1] for x in xs]
+    return xs, n_correct, n_total
 
 
 class WeightedStaircase:
@@ -103,27 +146,69 @@ class WeightedStaircase:
             `transformed_rule_target_p`. Not part of the Phase 0 freeze;
             added alongside `rule` (default `1`, i.e. simple 1-down/1-up if
             `rule="transformed"` were selected without changing it).
+        psychometric_family: Family fit to *all* recorded trials (not just
+            reversals) to estimate threshold, e.g. `"weibull"`, `"logistic"`,
+            `"norm_cdf"` (see `vpsych.core.psychometric.PsychometricFunction`).
+        guess_rate: Fixed guess (chance/floor) rate of the psychometric
+            function, e.g. `0.5` for 2AFC.
+        fix_lapse_rate: If given, the lapse rate is fixed to this value
+            during fitting rather than estimated freely.
+        n_bootstrap: Number of bootstrap resamples used to compute the
+            confidence interval (see
+            `vpsych.core.psychometric.bootstrap_ci`).
+        intensity_scale: Whether intensities are on a `"log10"` or
+            `"linear"` scale, forwarded to `fit_mle`/the fitted
+            `PsychometricFunction`.
+        rng: Random generator used only by `estimate()`'s bootstrap
+            resampling (see `vpsych.core.psychometric.bootstrap_ci`); the
+            staircase's own trial-by-trial logic is fully deterministic
+            given the responses it is told about. If `None`, an unseeded
+            `numpy.random.default_rng()` is created lazily the first time
+            `estimate()` needs it -- callers requiring reproducible CIs
+            must pass one (see `vpsych.core.rng.make_rng`).
 
-    Estimation: the threshold estimate is the mean of the intensities at the
-    last `n_reversals_for_estimate` reversals, with its CI computed via a
-    Student-t interval on those reversal values (`mean +/- t_(n-1,
-    1-alpha/2) * SEM`) -- appropriate here because the number of reversal
-    values used for the estimate is typically small (a handful to ~10),
-    where the t distribution's heavier tails are more honest than a normal
-    approximation. (A bootstrap of the reversal values is a documented
-    alternative -- either is defensible for this small-n, non-independent
-    use case; we use the t interval for simplicity and determinism.)
+    Estimation: `estimate()`'s primary point estimate and confidence
+    interval come from a maximum-likelihood psychometric-function fit
+    (`vpsych.core.psychometric.fit_mle`) to *every* trial this staircase has
+    seen (not just reversals), read off at `target_p_correct` via
+    `vpsych.core.psychometric.intensity_at_p_correct`, with the CI from
+    `vpsych.core.psychometric.bootstrap_ci` on the fitted threshold
+    parameter (converted to the `target_p_correct` intensity the same way
+    as `ConstantStimuli`, holding slope/lapse fixed at their point
+    estimates). This is the well-calibrated estimate to use.
 
-    Known limitation: reversal values are *not* independent draws (each is
-    shaped by the run of trials since the previous reversal), so treating
-    them as i.i.d. for the Student-t SEM understates the true uncertainty --
-    in simulation this interval's empirical coverage runs well below its
-    nominal level (see `tests/procedures/test_staircase.py`). Use it as a
-    rough indicator of estimate spread, not a calibrated confidence
-    interval; where a well-calibrated CI matters, prefer
-    `QuestPlusProcedure` or `ConstantStimuli` (whose CIs come from
-    `vpsych.core.psychometric.bootstrap_ci` on independent binomial trial
-    outcomes).
+    The classic reversal mean (the average intensity at the last
+    `n_reversals_for_estimate` reversals) is still computed and reported in
+    `extra["reversal_mean"]`, but *without* a CI: reversal values are not
+    independent draws (each is shaped by the run of trials since the
+    previous reversal), so a Student-t or other i.i.d.-based interval on
+    them is not a valid confidence interval -- empirically it undercovers
+    badly (~20-30% observed coverage for a nominal 95% interval; see
+    `tests/procedures/test_staircase.py`'s git history). We do not report a
+    mislabeled CI for it.
+
+    Known limitation of the new CI too: it is a large, real improvement over
+    the reversal-mean interval (~20-30% -> ~72-77% observed coverage for a
+    nominal 95% interval, measured in `tests/procedures/test_staircase.py`'s
+    slow validation), but it still does not reach the textbook ~95% a
+    passive (non-adaptive) design like `ConstantStimuli` achieves with the
+    same machinery. Cause, not a bug: a staircase concentrates almost all
+    trials tightly around threshold *by design* (that is what makes it
+    trial-efficient), which leaves the psychometric function's `slope`
+    poorly identified from the data (unlike `ConstantStimuli`'s
+    intentionally wide-spread levels). `estimate()`'s CI conversion (like
+    `ConstantStimuli`'s) holds the fitted `slope`/`lapse` fixed at their
+    point estimates and only propagates `bootstrap_ci`'s threshold interval
+    through `intensity_at_p_correct` -- a documented simplification that is
+    a good approximation only when slope uncertainty is modest
+    (`ConstantStimuli`'s own docstring says so), which is exactly the
+    condition a staircase's narrow dynamic range violates. Fully propagating
+    slope/lapse resample-to-resample uncertainty into the target-percent
+    intensity would require a bespoke bootstrap loop refitting per resample
+    (not just reusing `bootstrap_ci`'s single-parameter percentile
+    interval), which was judged out of scope here; this is reported
+    honestly rather than the coverage check's bands being widened to hide
+    it (see `tests/procedures/test_staircase.py`).
     """
 
     def __init__(
@@ -141,6 +226,12 @@ class WeightedStaircase:
         ci_level: float = 0.95,
         rule: Literal["weighted", "transformed"] = "weighted",
         n_down: int = 1,
+        psychometric_family: str = "weibull",
+        guess_rate: float = 0.5,
+        fix_lapse_rate: float | None = None,
+        n_bootstrap: int = 1000,
+        intensity_scale: IntensityScale = "log10",
+        rng: np.random.Generator | None = None,
     ) -> None:
         if step_up <= 0 or step_down <= 0:
             raise ValueError("step_up and step_down must be positive")
@@ -148,6 +239,8 @@ class WeightedStaircase:
             raise ValueError("n_reversals_to_stop must be >= 1")
         if n_down < 1:
             raise ValueError("n_down must be >= 1")
+        if psychometric_family not in _VALID_FAMILIES:
+            raise ValueError(f"psychometric_family must be one of {_VALID_FAMILIES}")
         if (
             min_intensity is not None
             and max_intensity is not None
@@ -168,6 +261,12 @@ class WeightedStaircase:
         self.ci_level = ci_level
         self.rule = rule
         self.n_down = n_down
+        self.psychometric_family = psychometric_family
+        self.guess_rate = guess_rate
+        self.fix_lapse_rate = fix_lapse_rate
+        self.n_bootstrap = n_bootstrap
+        self.intensity_scale: IntensityScale = intensity_scale
+        self.rng = rng
         self.finished: bool = False
 
         self._current_intensity = self._clip(float(start_intensity))
@@ -179,6 +278,8 @@ class WeightedStaircase:
         self._n_trials = 0
         self._consecutive_correct = 0
         self._reductions_applied = 0
+        self._trial_intensities: list[float] = []
+        self._trial_correct: list[bool] = []
 
     def _clip(self, value: float) -> float:
         if self.min_intensity is not None:
@@ -194,6 +295,8 @@ class WeightedStaircase:
         if self.finished:
             return
         self._n_trials += 1
+        self._trial_intensities.append(float(intensity))
+        self._trial_correct.append(bool(correct))
 
         move: int | None  # -1 => step down (harder/lower), +1 => step up (easier/higher)
         if self.rule == "weighted":
@@ -230,37 +333,93 @@ class WeightedStaircase:
         if self._reversal_count >= self.n_reversals_to_stop:
             self.finished = True
 
-    def estimate(self) -> ThresholdEstimate:
+    def _reversal_mean_and_sd(self) -> tuple[float, float, int]:
+        """Classic reversal-mean estimate (reported in `extra`, without a CI -- see class docstring)."""
         values = self._reversal_intensities[-self.n_reversals_for_estimate :]
         if not values:
             values = [self._current_intensity]
         arr = np.asarray(values, dtype=float)
         mean = float(np.mean(arr))
-        n = len(arr)
-        sd = 0.0
-        ci_low = ci_high = mean
-        if n >= 2:
-            sd = float(np.std(arr, ddof=1))
-            sem = sd / np.sqrt(n)
-            if sem > 0:
-                t_crit = float(_stats.t.ppf(0.5 + self.ci_level / 2, df=n - 1))
-                ci_low = mean - t_crit * sem
-                ci_high = mean + t_crit * sem
+        sd = float(np.std(arr, ddof=1)) if len(arr) >= 2 else 0.0
+        return mean, sd, len(arr)
+
+    def estimate(self) -> ThresholdEstimate:
+        reversal_mean, reversal_sd, n_reversals_used = self._reversal_mean_and_sd()
+        extra: dict[str, Any] = {
+            "reversal_mean": reversal_mean,
+            "n_reversals_used": n_reversals_used,
+            "n_reversals_total": self._reversal_count,
+            "reversal_sd": reversal_sd,
+            "rule": self.rule,
+            "target_p_correct": self.target_p_correct,
+        }
+
+        if not self._trial_intensities:
+            # No trials recorded yet (e.g. state_dict()/estimate() called before the
+            # first update()): a degenerate single-point estimate at the starting
+            # intensity, matching pre-fit behavior for callers that poll estimate()
+            # during practice trials.
+            return ThresholdEstimate(
+                value=self._current_intensity,
+                ci_low=self._current_intensity,
+                ci_high=self._current_intensity,
+                ci_level=self.ci_level,
+                units=self.intensity_units,
+                method="staircase_no_data",
+                extra=extra,
+            )
+
+        xs, n_correct, n_total = _aggregate_trials(self._trial_intensities, self._trial_correct)
+        family = cast(PsychometricFamily, self.psychometric_family)
+        fit = fit_mle(
+            intensities=xs,
+            n_correct=n_correct,
+            n_total=n_total,
+            family=family,
+            guess=self.guess_rate,
+            fix_lapse=self.fix_lapse_rate,
+            intensity_scale=self.intensity_scale,
+        )
+        value = intensity_at_p_correct(fit.function, self.target_p_correct)
+
+        rng = self.rng
+        if rng is None:
+            rng = np.random.default_rng()
+            self.rng = rng
+        thr_ci = bootstrap_ci(
+            fit, n_boot=self.n_bootstrap, level=self.ci_level, rng=rng, parameter="threshold"
+        )
+        low_fn = fit.function.model_copy(update={"threshold": thr_ci.ci_low})
+        high_fn = fit.function.model_copy(update={"threshold": thr_ci.ci_high})
+        ci_low = intensity_at_p_correct(low_fn, self.target_p_correct)
+        ci_high = intensity_at_p_correct(high_fn, self.target_p_correct)
+        if ci_low > ci_high:
+            ci_low, ci_high = ci_high, ci_low
+
+        extra.update(
+            {
+                "fit_threshold_f50": fit.function.threshold,
+                "slope": fit.function.slope,
+                "lapse": fit.function.lapse,
+                "log_likelihood": fit.log_likelihood,
+                "converged": fit.converged,
+                "n_trials": fit.n_trials,
+                "n_levels_used": len(xs),
+                "ci_method": (
+                    "bootstrap_ci on an MLE fit to all trials' threshold, converted to the "
+                    "target_p_correct intensity holding slope/lapse fixed"
+                ),
+            }
+        )
 
         return ThresholdEstimate(
-            value=mean,
+            value=float(value),
             ci_low=float(ci_low),
             ci_high=float(ci_high),
             ci_level=self.ci_level,
             units=self.intensity_units,
-            method="staircase_reversal_mean",
-            extra={
-                "n_reversals_used": n,
-                "n_reversals_total": self._reversal_count,
-                "reversal_sd": sd,
-                "rule": self.rule,
-                "target_p_correct": self.target_p_correct,
-            },
+            method=f"{self.psychometric_family}_mle_p{self.target_p_correct:g}",
+            extra=extra,
         )
 
     def state_dict(self) -> dict[str, Any]:

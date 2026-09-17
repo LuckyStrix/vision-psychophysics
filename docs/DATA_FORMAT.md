@@ -145,7 +145,7 @@ updated in place (atomically) when the session ends:
 |---|---|
 | `session_id` | `ses-YYYYMMDDTHHMMSS`. |
 | `participant_id` | The participant this session belongs to (must exist in `participants.tsv`). |
-| `plan` | The `SessionPlan` that was run: ordered/randomized list of `PlannedTest`s (`task_id`, `eye`, `params`, `viewing_distance_cm`), `ordering`, and the session-level RNG `seed`. |
+| `plan` | The `SessionPlan` that was run: `participant_id`, ordered/randomized list of `PlannedTest`s (`task_id`, `eye`, `params`, `viewing_distance_cm`), `ordering`, the session-level RNG `seed`, and an optional `calibration_hash` (the specific calibration to use; if omitted, the runner uses the most recently created calibration under `calibration/`). `SessionPlan.participant_id` and `SessionInfo.calibration_hash` (the calibration actually resolved and used) are the source of truth the runner reads to build this `SessionInfo` -- see `vpsych.runner.__main__.load_session_plan`. |
 | `calibration_hash` | `Calibration.content_hash()` of the calibration used (must exist under `calibration/`). |
 | `display` | Display geometry in effect for this session. |
 | `os_info`, `python_version`, `psychopy_version`, `gpu_info` | Environment provenance, free-form. |

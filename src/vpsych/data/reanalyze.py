@@ -20,7 +20,7 @@ from vpsych.data import dataset
 from vpsych.data.schemas import SessionInfo, TestSummary
 from vpsych.data.tsv import read_trials_tsv
 from vpsych.data.writer import _atomic_write_bytes
-from vpsych.tests_catalog.base import get_test
+from vpsych.tests_catalog.base import discover_tests, get_test
 
 _STEM_RE = re.compile(
     r"task-(?P<task_id>[a-z][a-z0-9_]*)_eye-(?P<eye>OD|OS|OU)_run-(?P<run>\d+)_trials$"
@@ -110,6 +110,11 @@ def reanalyze_session(path: str | Path, write: bool = False) -> list[ReanalysisR
     results: list[ReanalysisResult] = []
     if not beh_dir.exists():
         return results
+
+    # A fresh process (e.g. the vpsych-data CLI) may not have imported any
+    # real test's subpackage yet, in which case get_test() below would find
+    # an empty registry -- see discover_tests()'s docstring.
+    discover_tests()
 
     for trials_path in sorted(beh_dir.glob("*_trials.tsv")):
         task_id, eye, run = _parse_trials_stem(trials_path.stem)

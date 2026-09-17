@@ -111,6 +111,8 @@ class SessionPlan(BaseModel):
     """An ordered set of tests to run in one session, decided before the run starts.
 
     Attributes:
+        participant_id: Pseudonymous ID, `sub-XXXX`, of the participant this
+            plan is for.
         tests: The planned tests, in the order given (subject to
             `ordering`).
         ordering: `"fixed"` (run `tests` in the listed order) or
@@ -120,13 +122,24 @@ class SessionPlan(BaseModel):
             session-level randomization; always logged even when
             `ordering == "fixed"` for reproducibility of within-test
             randomization.
+        calibration_hash: `Calibration.content_hash()` of the specific
+            calibration to use for this session, or `None` to use the most
+            recently created calibration under the data root's
+            `calibration/` directory.
     """
 
     model_config = ConfigDict(frozen=True)
 
+    participant_id: str = Field(
+        pattern=r"^sub-[0-9]{4}$", description="Pseudonymous participant ID this plan is for."
+    )
     tests: list[PlannedTest] = Field(description="Planned tests, in listed order.")
     ordering: Ordering = Field(description="fixed or randomized.")
     seed: int = Field(description="RNG seed for session-level randomization.")
+    calibration_hash: str | None = Field(
+        default=None,
+        description="Calibration.content_hash() to use, or None for the most recent calibration.",
+    )
 
 
 class QualityFlag(BaseModel):
