@@ -117,12 +117,13 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m \"not slow\""
+addopts = "-ra --strict-markers -m \"not slow and not display\""
 filterwarnings = [
     "ignore::DeprecationWarning:psychopy.*",
 ]
 markers = [
     "slow: high-repetition scientific validation tests (bias/coverage over hundreds of simulated runs); excluded by default, run with `pytest -m slow` or `pytest -m \"\"`.",
+    "display: opens a real PsychoPy window to smoke-test stimulus rendering; excluded by default and in CI, run locally with `pytest -m display`.",
 ]
 
 [tool.coverage.run]
