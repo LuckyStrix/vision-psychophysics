@@ -331,6 +331,83 @@ def test_intensity_domain_is_1_to_100_percent_coherence() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Slow: bias/coverage of this test's own summarize() pipeline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_summarize_bias_and_coverage_over_many_simulated_runs() -> None:
+    """Bias/coverage of *this test's* 75%-correct conversion + percent reporting.
+
+    Not a re-validation of QUEST+ itself (that belongs to
+    tests/procedures/test_questplus_procedure.py, per docs/WRITING_A_TEST.md
+    section 11) -- this drives many independent simulated QUEST+ runs
+    against a known-truth observer directly (bypassing the trial loop/window
+    for speed) and checks that this test's own summarize() (the F=0.5 ->
+    75%-correct conversion, the log10 -> coherence_percent transform, and
+    the resulting reported CI) is not badly biased and has roughly nominal
+    coverage. Measured empirically at N=100, 50 trials/run: mean bias
+    +0.10 log10-coherence units (SD 0.23), 99% empirical coverage of a
+    nominal 95% CI -- see docs/methods/motion_coherence.md "Validation".
+    Uses N=50 here (not 100) to keep `pytest -m slow` runtime reasonable;
+    run with OPENBLAS_NUM_THREADS=1 per CONTRIBUTING.md.
+    """
+    from vpsych.core.observers import PsychometricObserver
+
+    display = _display()
+    test = MotionCoherenceTest(
+        params=MotionCoherenceParams(max_trials=50),
+        display=display,
+        calibration=None,
+        rng=np.random.default_rng(0),
+    )
+    true_fn = PsychometricFunction(
+        family="weibull", threshold=-1.0, slope=0.3, guess=0.5, lapse=0.02, intensity_scale="log10"
+    )
+    target_log10 = intensity_at_p_correct(true_fn, 0.75)
+
+    n_runs = 50
+    biases = []
+    coverages = []
+    for seed in range(n_runs):
+        observer = PsychometricObserver(true_fn, n_afc=2)
+        rng = np.random.default_rng(seed)
+        procedure = test.make_procedure()
+        rows = []
+        i = 0
+        while not procedure.finished:
+            x = procedure.next_intensity()
+            correct = observer.decide_correct({"intensity": x}, rng)
+            procedure.update(x, correct)
+            rows.append(
+                {
+                    "block": "main",
+                    "is_catch": False,
+                    "trial_index": i,
+                    "intensity": x,
+                    "correct": correct,
+                    "eye": "OU",
+                    "n_dropped_frames_trial": 0,
+                }
+            )
+            i += 1
+        summary = test.summarize(pd.DataFrame(rows))
+        est_log10 = math.log10(summary.estimate.value / 100.0)
+        ci_low_log10 = math.log10(summary.estimate.ci_low / 100.0)
+        ci_high_log10 = math.log10(summary.estimate.ci_high / 100.0)
+        biases.append(est_log10 - target_log10)
+        coverages.append(ci_low_log10 <= target_log10 <= ci_high_log10)
+
+    mean_bias = float(np.mean(biases))
+    coverage_rate = float(np.mean(coverages))
+    # Generous bounds around the measured values above (small-N Monte Carlo
+    # noise on both bias and coverage): this guards against a gross
+    # regression in the conversion pipeline, not a tight calibration check.
+    assert abs(mean_bias) < 0.3, f"mean bias {mean_bias:.3f} log10 units is too large"
+    assert coverage_rate >= 0.75, f"empirical coverage {coverage_rate:.2f} far below nominal 0.95"
+
+
+# ---------------------------------------------------------------------------
 # Display smoke test
 # ---------------------------------------------------------------------------
 

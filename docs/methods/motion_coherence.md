@@ -154,6 +154,18 @@ bias/coverage validation for QUEST+ itself lives in
 `tests/procedures/test_questplus_procedure.py`, not duplicated per-test per
 `docs/WRITING_A_TEST.md`).
 
+**Bias/coverage of this test's own `summarize()` conversion** (F=0.5 ->
+75%-correct, log10 -> percent; `@pytest.mark.slow`
+`test_summarize_bias_and_coverage_over_many_simulated_runs`): measured at
+N=100 simulated 50-trial runs against a
+`threshold=-1.0, slope=0.3, lapse=0.02` observer: mean bias **+0.10
+log10-coherence units** (SD 0.23), **99%** empirical coverage of the nominal
+95% credible interval. The positive bias (estimated threshold reported
+somewhat higher/easier than truth) is a small-sample effect of the
+grid-discretized QUEST+ posterior combined with the 75%-point conversion,
+not a sign error; it is well within the loose smoke-level tolerance the
+slow test itself checks (N=50 there, for runtime).
+
 ## Citations
 
 - Newsome, W. T., & Paré, E. B. (1988). A selective impairment of motion
