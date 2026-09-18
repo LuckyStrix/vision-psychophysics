@@ -145,7 +145,12 @@ def test_make_catch_trial_intensity_is_high_contrast() -> None:
     test = _make_test()
     catch = test.make_catch_trial_intensity()
     assert catch == pytest.approx(np.log10(test.params.catch_contrast))
-    assert catch > max(t for t in DEFAULT_INTENSITY_VALUES if t < 0) - 1e-9 or catch > -0.2
+    # Catch intensity should sit near the top of the candidate intensity grid
+    # (suprathreshold, comfortably detectable) -- within its top decile.
+    top_decile = max(DEFAULT_INTENSITY_VALUES) - 0.1 * (
+        max(DEFAULT_INTENSITY_VALUES) - min(DEFAULT_INTENSITY_VALUES)
+    )
+    assert catch >= top_decile
 
 
 # ---------------------------------------------------------------------------
@@ -370,32 +375,56 @@ def test_threshold_criterion_is_not_75_percent_point() -> None:
 
 
 class _FakeKeyboard:
-    """Stands in for `psychopy.hardware.keyboard.Keyboard`: returns a canned key instantly."""
+    """Stands in for `psychopy.hardware.keyboard.Keyboard`: returns a canned key instantly.
+
+    Timestamps use `psychopy.core.getTime()` (the same monotonic clock
+    `win.flip()` timestamps come from), not an arbitrary constant -- see
+    `test_contrast_sensitivity_function.py::_FakeKeyboard`'s docstring for
+    why that matters for `rt_s`.
+    """
 
     def __init__(self, key: str) -> None:
         self._key = key
         self._returned = False
 
-    def clearEvents(self) -> None:
+    def clearEvents(self) -> None:  # noqa: N802
         self._returned = False
 
-    def getKeys(
-        self, keyList: list[str] | None = None, timeStamped: bool = True
+    def getKeys(  # noqa: N802
+        self,
+        keyList: list[str] | None = None,  # noqa: N803
+        timeStamped: bool = True,  # noqa: N803
     ) -> list[tuple[str, float]]:
         if self._returned:
             return []
         self._returned = True
-        return [(self._key, 0.05)]
+        from psychopy import core
+
+        return [(self._key, core.getTime())]
 
 
 @pytest.mark.display
 def test_display_smoke_two_trials() -> None:
-    """Opens a real PsychoPy window and presents 2 trials with a fake keyboard."""
+    """Opens a real PsychoPy window and presents 2 trials with a fake keyboard.
+
+    Uses minimal frame counts (not the test's normal defaults) purely to
+    keep this manual smoke test fast; see
+    `test_contrast_sensitivity_function.py::test_display_smoke_two_trials`'s
+    docstring for why.
+    """
     from psychopy import visual
 
+    fast_params = LetterCSParams(
+        max_trials=2, fixation_duration_ms=1.0, response_timeout_ms=50.0, iti_ms=1.0
+    )
+    test = LetterContrastSensitivityTest(
+        params=fast_params,
+        display=_display(),
+        calibration=_calibration(),
+        rng=np.random.default_rng(0),
+    )
     win = visual.Window(size=(400, 300), fullscr=False, allowGUI=False)
     try:
-        test = _make_test(max_trials=2)
         test.build_stimuli(win)
         rng = np.random.default_rng(0)
         for trial_index in range(2):
@@ -412,5 +441,6 @@ def test_display_smoke_two_trials() -> None:
             presented = test.present(win, intensity, trial_ctx)
             assert presented.response in test.response_keys()
             assert presented.stimulus_onset_s >= 0.0
+            assert presented.rt_s is not None and presented.rt_s >= 0.0
     finally:
         win.close()

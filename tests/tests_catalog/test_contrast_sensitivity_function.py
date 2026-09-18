@@ -152,7 +152,7 @@ def test_frequency_grid_lower_bound_gives_two_cycles_at_default_size() -> None:
     assert min(test._freq_grid) >= test._freq_low_cpd - 1e-9
 
 
-def test_frequency_grid_upper_bound_is_quarter_of_nyquist() -> None:
+def test_frequency_grid_upper_bound_is_half_of_nyquist() -> None:
     display = _display()
     test = _make_test(display=display)
     assert test._freq_high_cpd == pytest.approx(display.nyquist_cpd / 2.0)
@@ -496,37 +496,73 @@ def test_csf_curve_is_reproducible_and_well_shaped() -> None:
 
 
 class _FakeKeyboard:
-    """Stands in for `psychopy.hardware.keyboard.Keyboard`: returns a canned key instantly."""
+    """Stands in for `psychopy.hardware.keyboard.Keyboard`: returns a canned key instantly.
+
+    Timestamps use `psychopy.core.getTime()` (the same monotonic clock
+    `win.flip()` timestamps come from) rather than an arbitrary constant --
+    `present()` computes `rt_s = response_timestamp - stimulus_onset_s`, and
+    an unrelated small constant would (and, during development, did)
+    produce a nonsensical large-negative `rt_s` once real flip timestamps
+    are already several seconds into the process's monotonic clock.
+    """
 
     def __init__(self, key: str) -> None:
         self._key = key
         self._returned = False
 
-    def clearEvents(self) -> None:
+    def clearEvents(self) -> None:  # noqa: N802
         self._returned = False
 
-    def waitKeys(
-        self, maxWait: float | None = None, keyList: list[str] | None = None, timeStamped: bool = True
+    def waitKeys(  # noqa: N802
+        self,
+        maxWait: float | None = None,  # noqa: N803
+        keyList: list[str] | None = None,  # noqa: N803
+        timeStamped: bool = True,  # noqa: N803
     ) -> list[tuple[str, float]]:
-        return [(self._key, 0.05)]
+        from psychopy import core
 
-    def getKeys(
-        self, keyList: list[str] | None = None, timeStamped: bool = True
+        return [(self._key, core.getTime())]
+
+    def getKeys(  # noqa: N802
+        self,
+        keyList: list[str] | None = None,  # noqa: N803
+        timeStamped: bool = True,  # noqa: N803
     ) -> list[tuple[str, float]]:
         if self._returned:
             return []
         self._returned = True
-        return [(self._key, 0.05)]
+        from psychopy import core
+
+        return [(self._key, core.getTime())]
 
 
 @pytest.mark.display
 def test_display_smoke_two_trials() -> None:
-    """Opens a real PsychoPy window and presents 2 trials with a fake keyboard."""
+    """Opens a real PsychoPy window and presents 2 trials with a fake keyboard.
+
+    Uses minimal frame counts (not the test's normal defaults) purely to
+    keep this manual smoke test fast; some display/compositor
+    configurations do not vsync cleanly under `visual.Window`, making each
+    `win.flip()` call block far longer than one true refresh interval.
+    """
     from psychopy import visual
 
+    fast_params = CSFParams(
+        max_trials=2,
+        fixation_duration_ms=1.0,
+        stimulus_duration_ms=1.0,
+        ramp_duration_ms=0.0,
+        response_timeout_ms=1.0,
+        iti_ms=1.0,
+    )
+    test = ContrastSensitivityFunctionTest(
+        params=fast_params,
+        display=_display(),
+        calibration=_calibration(),
+        rng=np.random.default_rng(0),
+    )
     win = visual.Window(size=(400, 300), fullscr=False, allowGUI=False)
     try:
-        test = _make_test(max_trials=2)
         test.build_stimuli(win)
         rng = np.random.default_rng(0)
         for trial_index in range(2):
@@ -543,5 +579,6 @@ def test_display_smoke_two_trials() -> None:
             presented = test.present(win, stim, trial_ctx)
             assert presented.response in test.response_keys()
             assert presented.stimulus_onset_s >= 0.0
+            assert presented.rt_s is not None and presented.rt_s >= 0.0
     finally:
         win.close()
