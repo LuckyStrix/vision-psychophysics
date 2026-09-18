@@ -358,20 +358,21 @@ def test_trivector_procedure_routes_updates_to_the_correct_axis() -> None:
         assert set(stim) == {"axis", "intensity"}
         axis_idx = round(stim["axis"])
         axis = AXES[axis_idx]
-        n_before = proc.axis_procedures[axis].state_dict()["n_trials"]
+        n_before = {a: sub.state_dict()["n_trials"] for a, sub in proc.axis_procedures.items()}
         proc.update(stim, bool(rng.random() < 0.5))
-        n_after = proc.axis_procedures[axis].state_dict()["n_trials"]
-        # Only the drawn axis's sub-procedure should have advanced.
-        assert n_after == n_before + 1
-        for other_axis, other_proc in proc.axis_procedures.items():
+        n_after = {a: sub.state_dict()["n_trials"] for a, sub in proc.axis_procedures.items()}
+        # Only the drawn axis's sub-procedure should have advanced; every
+        # other axis's own trial count must be exactly unchanged.
+        assert n_after[axis] == n_before[axis] + 1
+        for other_axis in AXES:
             if other_axis != axis:
-                assert other_proc.state_dict()["n_trials"] <= n_after
+                assert n_after[other_axis] == n_before[other_axis]
 
     assert proc.state_dict()["n_trials"] == 9
 
 
 def test_trivector_procedure_finishes_at_max_trials_total() -> None:
-    test = _make_test(params=ColorDiscriminationParams(max_trials=15))
+    test = _make_test(params=ColorDiscriminationParams(max_trials=30))
     proc = test.make_procedure()
     rng = np.random.default_rng(0)
     n = 0
@@ -379,13 +380,13 @@ def test_trivector_procedure_finishes_at_max_trials_total() -> None:
         stim = proc.next_stimulus()
         proc.update(stim, bool(rng.random() < 0.5))
         n += 1
-        assert n <= 15  # safety: must not run away past the configured budget
-    assert n == 15
+        assert n <= 30  # safety: must not run away past the configured budget
+    assert n == 30
     assert proc.state_dict()["finished"] is True
 
 
 def test_trivector_procedure_state_dict_is_json_serializable() -> None:
-    test = _make_test(params=ColorDiscriminationParams(max_trials=12))
+    test = _make_test(params=ColorDiscriminationParams(max_trials=30))
     proc = test.make_procedure()
     rng = np.random.default_rng(0)
     for _ in range(5):
@@ -395,7 +396,7 @@ def test_trivector_procedure_state_dict_is_json_serializable() -> None:
 
 
 def test_trivector_procedure_estimate_before_any_trial_raises() -> None:
-    test = _make_test(params=ColorDiscriminationParams(max_trials=12))
+    test = _make_test(params=ColorDiscriminationParams(max_trials=30))
     proc = test.make_procedure()
     with pytest.raises(RuntimeError, match="before any trials"):
         proc.estimate()
@@ -422,11 +423,19 @@ def test_trivector_procedure_estimate_combines_per_axis_geometrically() -> None:
 
 
 def _trials_fixture(test: ColorDiscriminationTest, n_per_axis: int = 15) -> pd.DataFrame:
-    """A fixed, deterministic trials table spanning all three axes plus some catch trials."""
+    """A fixed, deterministic trials table spanning all three axes plus some catch trials.
+
+    Intensities must land exactly on each axis's QUEST+ intensity grid --
+    `questplus.QuestPlus.update` looks the presented stimulus up by exact
+    value (`xarray`'s `.sel()`, no tolerance), so an arbitrary derived float
+    (even one mathematically "in range") raises `KeyError` unless it happens
+    to coincide with a grid point.
+    """
     rows: list[dict[str, Any]] = []
     trial_index = 0
+    probe_procedure = test.make_procedure()
     intensities = {
-        axis: float(np.log10(test._axis_max_displacement_x1e4[axis] * 0.3)) for axis in AXES
+        axis: probe_procedure.axis_procedures[axis].intensity_values[10] for axis in AXES
     }
     for axis_idx, axis in enumerate(AXES):
         for i in range(n_per_axis):
@@ -626,11 +635,20 @@ def test_simulated_end_to_end_recovery_of_three_distinct_thresholds(tmp_path: Pa
             str(tmp_path / "status.json"),
             "--data-root",
             str(data_root),
+            # run_session() only takes the SimulatedBackend path (rather than
+            # opening a real PsychoPy window) when args.simulate/-config is
+            # truthy -- the actual observer used is the injected
+            # `simulated_observer=` kwarg below (parse_simulated_observer_spec
+            # can't build a TrivectorObserver at all; see observer.py's
+            # module docstring), so this placeholder value is never used.
+            "--simulate",
+            "always_correct",
         ]
     )
     writer = _FakeWriter()
     exit_code = run_session(args, writer_factory=lambda *a: writer, simulated_observer=observer)
-    assert exit_code == RunnerExitCode.OK
+    status = (tmp_path / "status.json").read_text(encoding="utf-8") if exit_code != RunnerExitCode.OK else ""
+    assert exit_code == RunnerExitCode.OK, status
     assert len(writer.summaries) == 1
 
     summary = writer.summaries[0]
