@@ -137,9 +137,7 @@ def test_response_keys_are_arrows() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "center", [10.0, 10.123, 10.5, 10.987, 15.003, 9.9999, 3.0007, 27.5]
-)
+@pytest.mark.parametrize("center", [10.0, 10.123, 10.5, 10.987, 15.003, 9.9999, 3.0007, 27.5])
 def test_texture_centroid_matches_requested_subpixel_position(center: float) -> None:
     """Phase 2A requirement: centroid of the linearized luminance profile must equal the
     requested sub-pixel position to within 0.02 px."""
@@ -164,7 +162,9 @@ def test_line_column_coverage_integrates_to_bar_width() -> None:
 
 def test_render_vertical_line_texture_rejects_degenerate_y_range() -> None:
     with pytest.raises(ValueError):
-        render_vertical_line_texture(10, 10, center_x_px=5.0, width_px=1.0, y_start_px=5.0, y_end_px=5.0)
+        render_vertical_line_texture(
+            10, 10, center_x_px=5.0, width_px=1.0, y_start_px=5.0, y_end_px=5.0
+        )
 
 
 def test_present_logs_offset_px_matching_deg_to_px() -> None:
@@ -173,7 +173,11 @@ def test_present_logs_offset_px_matching_deg_to_px() -> None:
 
     test = _make_test()
     fn = PsychometricFunction(
-        family="weibull", threshold=1.0, slope=0.3, guess=0.5, lapse=0.02,
+        family="weibull",
+        threshold=1.0,
+        slope=0.3,
+        guess=0.5,
+        lapse=0.02,
         intensity_scale="log10",
     )
     observer = PsychometricObserver(fn, n_afc=2)
@@ -417,8 +421,10 @@ def test_recovery_slow_bias_and_coverage(true_log_offset: float) -> None:
     guess = 0.5
 
     def p_correct(x: float) -> float:
-        return 1.0 - lapse_true - (1.0 - guess - lapse_true) * math.exp(
-            -(10.0 ** (slope_true * (x - true_log_offset)))
+        return (
+            1.0
+            - lapse_true
+            - (1.0 - guess - lapse_true) * math.exp(-(10.0 ** (slope_true * (x - true_log_offset))))
         )
 
     biases = []
@@ -438,9 +444,7 @@ def test_recovery_slow_bias_and_coverage(true_log_offset: float) -> None:
         shift = reported - est.value
         ci_low = est.ci_low + shift
         ci_high = est.ci_high + shift
-        true_at_75 = _questplus_weibull_x_at_p(
-            true_log_offset, slope_true, guess, lapse_true, 0.75
-        )
+        true_at_75 = _questplus_weibull_x_at_p(true_log_offset, slope_true, guess, lapse_true, 0.75)
         biases.append(reported - true_at_75)
         if ci_low <= true_at_75 <= ci_high:
             covered += 1
@@ -467,10 +471,14 @@ class _FakeKeyboard:
         self._key_name = key_name
         self._armed = True
 
-    def clearEvents(self) -> None:
+    def clearEvents(self) -> None:  # noqa: N802 -- mimics psychopy.hardware.keyboard.Keyboard
         self._armed = True
 
-    def getKeys(self, keyList: list[str] | None = None, waitRelease: bool = False) -> list[Any]:
+    def getKeys(  # noqa: N802 -- mimics psychopy.hardware.keyboard.Keyboard
+        self,
+        keyList: list[str] | None = None,  # noqa: N803
+        waitRelease: bool = False,  # noqa: N803
+    ) -> list[Any]:
         del keyList, waitRelease
         if not self._armed:
             return []

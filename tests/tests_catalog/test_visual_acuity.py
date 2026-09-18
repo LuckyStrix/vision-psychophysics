@@ -196,7 +196,11 @@ def test_present_logs_rendered_gap_px_matching_deg_to_px(monkeypatch: pytest.Mon
 
     test = _make_test()
     fn = PsychometricFunction(
-        family="weibull", threshold=0.3, slope=0.25, guess=0.125, lapse=0.02,
+        family="weibull",
+        threshold=0.3,
+        slope=0.25,
+        guess=0.125,
+        lapse=0.02,
         intensity_scale="linear",
     )
     observer = PsychometricObserver(fn, n_afc=8)
@@ -430,8 +434,10 @@ def test_recovery_slow_bias_and_coverage(true_threshold: float) -> None:
     guess = 0.125
 
     def p_correct(x: float) -> float:
-        return 1.0 - lapse_true - (1.0 - guess - lapse_true) * math.exp(
-            -(10.0 ** (slope_true * (x - true_threshold)))
+        return (
+            1.0
+            - lapse_true
+            - (1.0 - guess - lapse_true) * math.exp(-(10.0 ** (slope_true * (x - true_threshold))))
         )
 
     biases = []
@@ -482,10 +488,14 @@ class _FakeKeyboard:
         self._key_name = key_name
         self._armed = True
 
-    def clearEvents(self) -> None:
+    def clearEvents(self) -> None:  # noqa: N802 -- mimics psychopy.hardware.keyboard.Keyboard
         self._armed = True
 
-    def getKeys(self, keyList: list[str] | None = None, waitRelease: bool = False) -> list[Any]:
+    def getKeys(  # noqa: N802 -- mimics psychopy.hardware.keyboard.Keyboard
+        self,
+        keyList: list[str] | None = None,  # noqa: N803
+        waitRelease: bool = False,  # noqa: N803
+    ) -> list[Any]:
         del keyList, waitRelease
         if not self._armed:
             return []
