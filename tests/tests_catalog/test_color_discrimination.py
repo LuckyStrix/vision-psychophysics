@@ -647,7 +647,11 @@ def test_simulated_end_to_end_recovery_of_three_distinct_thresholds(tmp_path: Pa
     )
     writer = _FakeWriter()
     exit_code = run_session(args, writer_factory=lambda *a: writer, simulated_observer=observer)
-    status = (tmp_path / "status.json").read_text(encoding="utf-8") if exit_code != RunnerExitCode.OK else ""
+    status = (
+        (tmp_path / "status.json").read_text(encoding="utf-8")
+        if exit_code != RunnerExitCode.OK
+        else ""
+    )
     assert exit_code == RunnerExitCode.OK, status
     assert len(writer.summaries) == 1
 
@@ -744,7 +748,14 @@ class _FakeKeyboard:
         timeStamped: bool = True,  # noqa: N803
     ) -> list[Any]:
         del keyList, timeStamped
-        return [("up", 0.0)]
+        # Use PsychoPy's own global clock (the same one win.flip() timestamps
+        # come from) so the fabricated "keypress" timestamp is always after
+        # the stimulus-onset flip time, giving a non-negative rt_s -- a bare
+        # 0.0 here would (correctly) fail PresentedTrial's rt_s >= 0
+        # validation once run alongside a real window's monotonic clock.
+        from psychopy.core import getTime
+
+        return [("up", getTime())]
 
 
 @pytest.mark.display
