@@ -297,19 +297,19 @@ class ColorDiscriminationTest(PsychophysicalTest):
         citations=[
             "Mollon, J. D., & Reffin, J. P. (1989). A computer-controlled colour vision test "
             "that combines the principles of Chibret and of Stilling. Journal of Physiology, "
-            "414, 5P.",
+            "414, 20P.",
             "Regan, B. C., Reffin, J. P., & Mollon, J. D. (1994). Luminance noise and the rapid "
             "determination of discrimination ellipses in colour deficiency. Vision Research, "
-            "34(10), 1279-1299.",
+            "34(10), 1279-1299. https://doi.org/10.1016/0042-6989(94)90203-8",
             "Reffin, J. P., Astell, S., & Mollon, J. D. (1991). Trials of a computer-controlled "
             "colour vision test that preserves the advantages of pseudo-isochromatic plates. In "
-            "B. Drum, J. D. Mollon, & G. Verriest (Eds.), Colour Vision Deficiencies X (pp. "
-            "69-76). Kluwer.",
+            "B. Drum, J. D. Moreland, & A. Serra (Eds.), Colour Vision Deficiencies X (pp. "
+            "69-76). Kluwer. https://doi.org/10.1007/978-94-011-3774-4_9",
             "Vienot, F., Brettel, H., & Mollon, J. D. (1999). Digital video colourmaps for "
             "checking the legibility of displays by dichromats. Color Research & Application, "
-            "24(4), 243-252.",
+            "24(4), 243-252. https://doi.org/10.1002/(SICI)1520-6378(199908)24:4<243::AID-COL5>3.0.CO;2-3",
             "Watson, A. B. (2017). QUEST+: A general multidimensional Bayesian adaptive "
-            "psychometric method. Journal of Vision, 17(3):10.",
+            "psychometric method. Journal of Vision, 17(3):10. https://doi.org/10.1167/17.3.10",
         ],
         params_model=ColorDiscriminationParams,
         hidden=False,
