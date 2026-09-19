@@ -41,7 +41,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from scipy import stats
 from scipy.interpolate import PchipInterpolator
 
-from vpsych.core.calibration.models import GammaCalibrationPoint
+from vpsych.core.calibration.models import GammaCalibration, GammaCalibrationPoint
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -248,6 +248,64 @@ def fit_gamma_lookup(points: Sequence[GammaCalibrationPoint]) -> GammaChannelMod
         lum_max_cdm2=float(lums[-1]),
         lookup=lookup,
         inverse_lookup=inverse_lookup,
+    )
+
+
+def gamma_channel_model_from_calibration(gamma_cal: GammaCalibration) -> GammaChannelModel:
+    """Build a grayscale `GammaChannelModel` from a stored `GammaCalibration`.
+
+    `fit_gamma`/`fit_gamma_lookup` build a `GammaChannelModel` at
+    calibration time, from raw measured points; this is the missing
+    counterpart for the far more common later case, at test-run time,
+    where all a caller has is the *stored*
+    `vpsych.core.calibration.models.GammaCalibration` (persisted from a
+    previous calibration session) and needs a `GammaChannelModel` for
+    `linearize`/`make_gamma_ramp`. `gamma_single` is used directly when
+    present (the common case for both grade A combined-channel photometer
+    fits and grade B psychophysical estimates, see `docs/CALIBRATION.md`);
+    otherwise the mean of whichever of `gamma_r`/`gamma_g`/`gamma_b` are set
+    is used, for a caller (e.g. a grayscale, R=G=B, stimulus) that wants a
+    single combined-channel model rather than three independent ones.
+
+    Originally implemented (twice, independently, once for a private
+    `_questplus_weibull_x_at_p`-style local helper) as
+    `gamma_channel_model_from_calibration` inside `tests_catalog
+    ._contrast_rendering` for `contrast_sensitivity_function` and
+    `letter_contrast_sensitivity`; promoted here so any test (or
+    `PsychoPyBackend` window setup) can share the one implementation.
+
+    Args:
+        gamma_cal: The active calibration's gamma characterization. Must
+            not be `method="none"` (callers should have already checked
+            `TestRequirements.needs_gamma_calibration` via
+            `vpsych.tests_catalog.base.check_requirements`).
+
+    Returns:
+        A parametric `GammaChannelModel` usable with `linearize`.
+
+    Raises:
+        ValueError: If `gamma_cal.method == "none"`, or neither
+            `gamma_single` nor any per-channel gamma is set.
+    """
+    if gamma_cal.method == "none":
+        raise ValueError(
+            "Cannot linearize against an uncalibrated (method='none') GammaCalibration; "
+            "callers should have already checked TestRequirements.needs_gamma_calibration."
+        )
+    if gamma_cal.gamma_single is not None:
+        gamma = gamma_cal.gamma_single
+    else:
+        per_channel = [
+            v for v in (gamma_cal.gamma_r, gamma_cal.gamma_g, gamma_cal.gamma_b) if v is not None
+        ]
+        if not per_channel:
+            raise ValueError(
+                "GammaCalibration has neither gamma_single nor any per-channel gamma set; "
+                "cannot build a GammaChannelModel from it."
+            )
+        gamma = float(np.mean(per_channel))
+    return GammaChannelModel(
+        lum_min_cdm2=gamma_cal.lum_min_cdm2, lum_max_cdm2=gamma_cal.lum_max_cdm2, gamma=gamma
     )
 
 

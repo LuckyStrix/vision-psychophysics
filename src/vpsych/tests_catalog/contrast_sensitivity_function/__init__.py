@@ -274,17 +274,15 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
             max_trials=self._effective_max_trials,
         )
 
-    def make_catch_trial_intensity(self) -> dict[str, float]:  # type: ignore[override]
-        # PsychophysicalTest.make_catch_trial_intensity is declared `-> float`,
-        # but vpsych.core.trial_loop's TrialLoop.run already types the value it
-        # assigns from this call as `float | dict[str, float]` (see
-        # `value: float | dict[str, float] = self.test.make_catch_trial_intensity()`)
-        # specifically to support a MultiParamProcedure-driven test like this
-        # one, whose catch-trial "intensity" is inherently 2D (spatial
-        # frequency + contrast). This is a real gap in the frozen abstract
-        # signature (reported, not fixed here -- base.py is outside this
-        # package's remit); QCSF.update()/present() below both expect this
-        # dict shape, matching next_stimulus()'s own return convention.
+    def make_catch_trial_intensity(self) -> dict[str, float]:
+        # PsychophysicalTest.make_catch_trial_intensity's signature is
+        # `-> float | dict[str, float]` precisely to support a
+        # MultiParamProcedure-driven test like this one, whose catch-trial
+        # "intensity" is inherently 2D (spatial frequency + contrast) --
+        # matching vpsych.core.trial_loop.TrialLoop.run's own
+        # `value: float | dict[str, float]` typing of this call's result.
+        # QCSF.update()/present() below both expect this dict shape,
+        # matching next_stimulus()'s own return convention.
         contrast = self.params.catch_contrast
         return {
             "spatial_frequency_cpd": self.params.catch_spatial_frequency_cpd,

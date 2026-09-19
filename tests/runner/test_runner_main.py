@@ -432,6 +432,38 @@ def test_build_simulated_observer_unknown_kind_raises() -> None:
         build_simulated_observer("bogus", {})
 
 
+def test_register_simulated_observer_kind_extends_dispatch() -> None:
+    """A registered kind (see color_discrimination.observer's "trivector" for a real example)
+    becomes resolvable through build_simulated_observer/parse_simulated_observer_spec like a
+    built-in kind, without modifying vpsych.runner.__main__ itself."""
+    from vpsych.runner.__main__ import _AlwaysCorrectObserver, register_simulated_observer_kind
+
+    calls: list[dict[str, float]] = []
+
+    def _builder(params: dict[str, float]) -> Any:
+        calls.append(params)
+        return _AlwaysCorrectObserver()
+
+    register_simulated_observer_kind("test_only_kind_xyz", _builder)
+    try:
+        obs = build_simulated_observer("test_only_kind_xyz", {"a": 1.0})
+        assert isinstance(obs, _AlwaysCorrectObserver)
+        assert calls == [{"a": 1.0}]
+
+        obs2 = parse_simulated_observer_spec("test_only_kind_xyz:a=2.0")
+        assert isinstance(obs2, _AlwaysCorrectObserver)
+        assert calls[-1] == {"a": 2.0}
+
+        with pytest.raises(ValueError, match="already registered"):
+            register_simulated_observer_kind("test_only_kind_xyz", _builder)
+        with pytest.raises(ValueError, match="built-in kind"):
+            register_simulated_observer_kind("psychometric", _builder)
+    finally:
+        from vpsych.runner import __main__ as _runner_main
+
+        del _runner_main._REGISTERED_SIMULATED_OBSERVER_KINDS["test_only_kind_xyz"]
+
+
 def test_parse_simulated_observer_spec_malformed_pair_raises() -> None:
     with pytest.raises(ValueError, match="Malformed"):
         parse_simulated_observer_spec("psychometric:threshold")

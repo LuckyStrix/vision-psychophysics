@@ -206,14 +206,47 @@ with this test's configured viewing distance) are available from
   degrees of visual angle, and `self.display.px_per_deg_at_center` for
   spatial-frequency conversions (cycles/deg -> cycles/px for
   `psychopy.visual.GratingStim(sf=...)`).
-- **Gamma linearization**: a real test should linearize contrast against
-  `self.calibration.gamma` (`vpsych.core.calibration.gamma.linearize`) when
-  setting the window's gamma ramp at window-creation time (once per
-  session, not per trial -- this happens in `PsychoPyBackend`/window setup,
-  not typically inside your test).
-  `check_requirements`/`TestSpec.requirements.needs_gamma_calibration` is
-  how you *require* a real (non-`"none"`) gamma calibration before your
-  test is runnable at all.
+- **Gamma linearization**: `PsychoPyBackend` does **not** set a window gamma
+  ramp (there is no `win.gammaRamp`/monitor gamma-grid call anywhere in
+  it, and this is a deliberate, not an accidental, omission -- see the
+  "Phase 4 gamma-ramp decision" box below). Every real gamma-dependent test
+  therefore does its **own full linearization in Python**, inside
+  `present()`/`build_stimuli()`: compute the desired *linear* luminance
+  mixture for each pixel first, then convert it to the correct
+  gamma-corrected hardware drive value yourself, via
+  `vpsych.core.calibration.gamma.linearize` against a `GammaChannelModel`
+  built from `self.calibration.gamma` (use
+  `vpsych.core.calibration.gamma.gamma_channel_model_from_calibration` to
+  build that model from the stored calibration -- see
+  `contrast_sensitivity_function`/`letter_contrast_sensitivity`
+  (`tests_catalog._contrast_rendering`), `color_discrimination`, and
+  `vernier_acuity` (`tests_catalog.vernier_acuity.texture
+  .render_vertical_line_texture`'s `gamma_model` argument) for four worked
+  examples of this same pattern), and hand PsychoPy the already-correct
+  drive-level array directly (an unconfigured `psychopy.visual.Window`
+  applies no gamma correction of its own, which is exactly what makes this
+  work). `check_requirements`/`TestSpec.requirements.needs_gamma_calibration`
+  is how you *require* a real (non-`"none"`) gamma calibration before your
+  test is runnable at all, regardless of which of the above helpers you use.
+
+  > **Phase 4 gamma-ramp decision.** An earlier draft of this section (and
+  > of `vernier_acuity`'s own docstrings) said gamma linearization happens
+  > via the window's own gamma ramp, set once at window-creation time by
+  > `PsychoPyBackend` -- but that hook never actually existed, so
+  > `vernier_acuity` (which fed raw *linear* luminance values, expecting a
+  > ramp to correct them) was silently wrong while
+  > `contrast_sensitivity_function`/`letter_contrast_sensitivity`/
+  > `color_discrimination` (which already self-linearized, expecting *no*
+  > ramp) were accidentally right. Adding a real window ramp would have
+  > fixed `vernier_acuity` but *broken* the other three (double-correcting
+  > them), so the resolution was the other direction: `vernier_acuity` now
+  > self-linearizes too (via `render_vertical_line_texture`'s `gamma_model`
+  > argument), matching the pattern the other three tests already used.
+  > `PsychoPyBackend` setting no ramp is the intended, permanent design, not
+  > a gap to eventually fill -- `vpsych.core.calibration.gamma
+  > .make_gamma_ramp` still exists (e.g. for a future non-PsychoPy backend
+  > or a manual calibration-verification tool), it is just not wired into
+  > `PsychoPyBackend`.
 - **Bit-stealing dithering**: for contrasts finer than the display's 8-bit
   step (~1/255), dither before drawing:
   `vpsych.core.calibration.dither.dither_to_uint8(intensity_0_to_1, rng)`

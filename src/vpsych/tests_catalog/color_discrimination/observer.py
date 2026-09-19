@@ -2,23 +2,28 @@
 
 `vpsych.runner.__main__`'s `--simulate`/`--simulate-config` machinery
 (`parse_simulated_observer_spec`/`build_simulated_observer`/
-`_simulated_observer_from_json`) only dispatches two observer *kinds*,
-`"psychometric"` (a single ground-truth `PsychometricFunction`) and `"csf"`
--- neither can express three independent per-axis ground-truth thresholds
-keyed by `stimulus["axis"]`, and `_simulated_observer_from_json`'s `kind`
-dispatch is a closed `if/elif` in `vpsych.runner.__main__.build_simulated_observer`
-that cannot be extended from outside that module. This is a real limitation
-of the runner's current simulated-observer configuration surface for any
-multi-axis test (reported upstream; see this test's package-level report).
+`_simulated_observer_from_json`) originally dispatched only two observer
+*kinds*, `"psychometric"` (a single ground-truth `PsychometricFunction`)
+and `"csf"` -- neither can express three independent per-axis ground-truth
+thresholds keyed by `stimulus["axis"]`, and `build_simulated_observer`'s
+`kind` dispatch used to be a closed `if/elif` that could not be extended
+from outside `vpsych.runner.__main__` at all, so `TrivectorObserver` (and
+any future multi-dimensional observer) was only usable by constructing it
+directly and injecting it via `run_session(..., simulated_observer=...)`,
+bypassing `--simulate`/`--simulate-config` entirely.
 
-`TrivectorObserver` is therefore not resolvable via `--simulate-config`'s
-CLI/JSON path at all. It is fully usable, however, by constructing it
-directly and passing it to `vpsych.runner.__main__.run_session(...,
-simulated_observer=...)` -- exactly how
-`tests/tests_catalog/test_color_discrimination.py`'s simulated end-to-end
-recovery test exercises it (see that test for a worked example), which is
-the documented way to drive this test's own three-axis validation without a
-CLI change.
+That dispatch is now a registry (`vpsych.runner.__main__
+.register_simulated_observer_kind`); this module registers `"trivector"` as
+an import-time side effect below (mirroring `@register_test`'s own
+import-time registration pattern), so `TrivectorObserver` is resolvable
+through the normal CLI/JSON path like any built-in kind --
+`"trivector:threshold_protan=<f>,threshold_deutan=<f>,threshold_tritan=<f>"`
+(optionally with per-axis `slope_<axis>`/`guess_<axis>`/`lapse_<axis>`, or
+shared `slope=`/`guess=`/`lapse=` fallbacks) -- see
+`_build_trivector_observer` below. `color_discrimination/__init__.py`
+imports this module (for exactly this registration side effect), so the
+registration happens whenever `vpsych.tests_catalog.base.discover_tests()`
+walks the catalog, the same guarantee `@register_test` itself relies on.
 """
 
 from __future__ import annotations
@@ -28,8 +33,17 @@ from typing import Any
 import numpy as np
 
 from vpsych.core.psychometric import PsychometricFunction
+from vpsych.runner.__main__ import register_simulated_observer_kind
 from vpsych.tests_catalog.color_discrimination.discs import RESPONSE_KEYS
 from vpsych.tests_catalog.color_discrimination.procedure import AXES
+
+#: Defaults for `_build_trivector_observer`'s optional per-axis parameters,
+#: matching this package's own `GUESS_RATE`/default slope/lapse grids (see
+#: `color_discrimination/__init__.py`; not imported directly here to avoid
+#: a circular import, since that module imports this one).
+_DEFAULT_GUESS_RATE = 0.25
+_DEFAULT_SLOPE = 0.4
+_DEFAULT_LAPSE_RATE = 0.02
 
 
 class TrivectorObserver:
@@ -81,3 +95,36 @@ class TrivectorObserver:
         alternatives = [k for k in RESPONSE_KEYS if k != correct_response]
         idx = int(rng.integers(len(alternatives)))
         return alternatives[idx]
+
+
+def _build_trivector_observer(params: dict[str, float]) -> TrivectorObserver:
+    """Build a `TrivectorObserver` from a flat `dict[str, float]` params (see module docstring).
+
+    Required: `threshold_<axis>` for each of `AXES` ("protan", "deutan",
+    "tritan"). Optional per-axis `slope_<axis>`/`guess_<axis>`/
+    `lapse_<axis>`, falling back to shared `slope=`/`guess=`/`lapse=`
+    (further falling back to `_DEFAULT_SLOPE`/`_DEFAULT_GUESS_RATE`/
+    `_DEFAULT_LAPSE_RATE` if neither is given), matching
+    `build_simulated_observer`'s own `params.get(key, default)` convention
+    for its built-in kinds.
+    """
+    functions: dict[str, PsychometricFunction] = {}
+    missing = [f"threshold_{axis}" for axis in AXES if f"threshold_{axis}" not in params]
+    if missing:
+        raise ValueError(f"trivector observer spec is missing required parameter(s) {missing}.")
+    shared_slope = params.get("slope", _DEFAULT_SLOPE)
+    shared_guess = params.get("guess", _DEFAULT_GUESS_RATE)
+    shared_lapse = params.get("lapse", _DEFAULT_LAPSE_RATE)
+    for axis in AXES:
+        functions[axis] = PsychometricFunction(
+            family="weibull",
+            threshold=params[f"threshold_{axis}"],
+            slope=params.get(f"slope_{axis}", shared_slope),
+            guess=params.get(f"guess_{axis}", shared_guess),
+            lapse=params.get(f"lapse_{axis}", shared_lapse),
+            intensity_scale="log10",
+        )
+    return TrivectorObserver(functions)
+
+
+register_simulated_observer_kind("trivector", _build_trivector_observer)

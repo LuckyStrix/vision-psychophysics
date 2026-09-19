@@ -129,6 +129,50 @@ _BUILTIN_SIMULATED_OBSERVERS: dict[str, Callable[[], SimulatedObserver]] = {
     "always_correct": _AlwaysCorrectObserver,
 }
 
+#: Registry of `build_simulated_observer` "kind" extensions, beyond the two
+#: built in (`"psychometric"`, `"csf"`). Was previously a closed `if/elif`
+#: in `build_simulated_observer` that only this module could extend --
+#: `color_discrimination`'s multi-axis `TrivectorObserver` needs a per-axis
+#: threshold spec (`{"threshold_protan": ..., "threshold_deutan": ...,
+#: "threshold_tritan": ...}`) that neither of the two built-in kinds can
+#: express, and had to bypass `--simulate`/`--simulate-config` entirely,
+#: injecting a directly-constructed observer via `run_session`'s
+#: `simulated_observer=` kwarg instead (see
+#: `vpsych.tests_catalog.color_discrimination.observer`'s module docstring
+#: for the full history). `register_simulated_observer_kind` lets a test
+#: package register its own kind (as an import-time side effect, e.g. in
+#: its own `observer.py`, imported by that package's `__init__.py`) so it
+#: becomes resolvable through the normal `--simulate`/`--simulate-config`
+#: CLI/JSON path like any built-in kind.
+_REGISTERED_SIMULATED_OBSERVER_KINDS: dict[
+    str, Callable[[dict[str, float]], SimulatedObserver]
+] = {}
+
+
+def register_simulated_observer_kind(
+    kind: str, builder: Callable[[dict[str, float]], SimulatedObserver]
+) -> None:
+    """Register a `build_simulated_observer` "kind" extension.
+
+    Args:
+        kind: The `--simulate kind:...`/`{"kind": ...}` name this builder
+            handles, e.g. `"trivector"`. Must not collide with a built-in
+            kind (`"psychometric"`, `"csf"`) or an already-registered one.
+        builder: Called with the parsed `dict[str, float]` params (see
+            `_parse_kv_params`) and must return a constructed
+            `SimulatedObserver`, raising `ValueError` for a missing/invalid
+            parameter -- the same contract `build_simulated_observer`'s
+            built-in kinds follow.
+
+    Raises:
+        ValueError: If `kind` is a built-in kind or already registered.
+    """
+    if kind in ("psychometric", "csf"):
+        raise ValueError(f"Simulated observer kind {kind!r} is a built-in kind, cannot register.")
+    if kind in _REGISTERED_SIMULATED_OBSERVER_KINDS:
+        raise ValueError(f"Simulated observer kind {kind!r} is already registered.")
+    _REGISTERED_SIMULATED_OBSERVER_KINDS[kind] = builder
+
 
 def resolve_simulated_observer(name: str) -> SimulatedObserver:
     """Resolve a bare `--simulate` observer name to a `SimulatedObserver` instance.
@@ -190,6 +234,9 @@ def build_simulated_observer(kind: str, params: dict[str, float]) -> SimulatedOb
     from vpsych.core.procedures.qcsf import DEFAULT_PSYCHOMETRIC_SLOPE
     from vpsych.core.psychometric import PsychometricFunction
 
+    if kind in _REGISTERED_SIMULATED_OBSERVER_KINDS:
+        return _REGISTERED_SIMULATED_OBSERVER_KINDS[kind](params)
+
     if kind == "psychometric":
         missing = [k for k in ("threshold", "slope") if k not in params]
         if missing:
@@ -222,7 +269,8 @@ def build_simulated_observer(kind: str, params: dict[str, float]) -> SimulatedOb
             lapse_rate=params.get("lapse", 0.02),
         )
 
-    raise ValueError(f"Unknown simulated observer kind {kind!r}. Known: psychometric, csf.")
+    known = ["psychometric", "csf", *sorted(_REGISTERED_SIMULATED_OBSERVER_KINDS)]
+    raise ValueError(f"Unknown simulated observer kind {kind!r}. Known: {', '.join(known)}.")
 
 
 def parse_simulated_observer_spec(spec: str) -> SimulatedObserver:

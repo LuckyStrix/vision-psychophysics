@@ -584,27 +584,24 @@ def _write_calibration(data_root: Path, cal: Calibration) -> str:
 def test_simulated_end_to_end_recovery_of_three_distinct_thresholds(tmp_path: Path) -> None:
     """Drives a real run_session() with a per-axis TrivectorObserver (a protan-like elevated
     threshold, a typical deutan threshold, and a low tritan threshold) and checks the recovered
-    per-axis thresholds track their distinct ground truths -- not resolvable via
-    --simulate-config (see observer.py's module docstring), so the observer is injected
-    directly, exactly as that docstring documents."""
+    per-axis thresholds track their distinct ground truths.
+
+    Goes through the normal `--simulate` CLI-spec path (`parse_simulated_observer_spec` ->
+    `build_simulated_observer`'s registry, see `vpsych.runner.__main__
+    .register_simulated_observer_kind` and observer.py's module docstring), rather than
+    injecting a directly-constructed observer via `run_session`'s `simulated_observer=` kwarg
+    -- once a real limitation (a closed if/elif that only vpsych.runner.__main__ could extend),
+    now exercised as a registered "trivector" kind like any built-in one.
+    """
     catalog_base.discover_tests()
     data_root = tmp_path / "data"
     cal = _calibration()
     _write_calibration(data_root, cal)
 
     true_thresholds = {"protan": 2.3, "deutan": 1.6, "tritan": 1.1}  # log10 uv x1e-4 units
-    funcs = {
-        axis: PsychometricFunction(
-            family="weibull",
-            threshold=v,
-            slope=0.4,
-            guess=0.25,
-            lapse=0.02,
-            intensity_scale="log10",
-        )
-        for axis, v in true_thresholds.items()
-    }
-    observer = TrivectorObserver(funcs)
+    simulate_spec = "trivector:" + ",".join(
+        f"threshold_{axis}={v}" for axis, v in true_thresholds.items()
+    )
 
     plan_path = tmp_path / "plan.json"
     plan_path.write_text(
@@ -635,18 +632,12 @@ def test_simulated_end_to_end_recovery_of_three_distinct_thresholds(tmp_path: Pa
             str(tmp_path / "status.json"),
             "--data-root",
             str(data_root),
-            # run_session() only takes the SimulatedBackend path (rather than
-            # opening a real PsychoPy window) when args.simulate/-config is
-            # truthy -- the actual observer used is the injected
-            # `simulated_observer=` kwarg below (parse_simulated_observer_spec
-            # can't build a TrivectorObserver at all; see observer.py's
-            # module docstring), so this placeholder value is never used.
             "--simulate",
-            "always_correct",
+            simulate_spec,
         ]
     )
     writer = _FakeWriter()
-    exit_code = run_session(args, writer_factory=lambda *a: writer, simulated_observer=observer)
+    exit_code = run_session(args, writer_factory=lambda *a: writer)
     status = (
         (tmp_path / "status.json").read_text(encoding="utf-8")
         if exit_code != RunnerExitCode.OK

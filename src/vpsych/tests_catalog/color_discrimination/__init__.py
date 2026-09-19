@@ -112,8 +112,14 @@ from vpsych.tests_catalog.base import (
     register_test,
 )
 from vpsych.tests_catalog.color_discrimination import colorspace, discs
+from vpsych.tests_catalog.color_discrimination import observer as _observer  # noqa: F401
 from vpsych.tests_catalog.color_discrimination.discs import RESPONSE_KEYS, Disc
 from vpsych.tests_catalog.color_discrimination.procedure import AXES, TrivectorProcedure
+
+# `_observer` (imported, not otherwise used in this module) registers the
+# "trivector" --simulate/--simulate-config observer kind as an import-time
+# side effect -- see observer.py's module docstring and
+# vpsych.runner.__main__.register_simulated_observer_kind.
 
 __all__ = [
     "AXES",

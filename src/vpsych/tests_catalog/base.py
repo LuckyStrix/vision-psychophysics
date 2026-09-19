@@ -338,7 +338,7 @@ class PsychophysicalTest(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def make_catch_trial_intensity(self) -> float:
+    def make_catch_trial_intensity(self) -> float | dict[str, float]:
         """Return a suprathreshold intensity to use for a catch trial.
 
         Catch trials (about 10% of main-block trials, per the shared trial
@@ -347,9 +347,15 @@ class PsychophysicalTest(ABC):
         the estimated lapse rate.
 
         Returns:
-            An intensity value, in the same `intensity_units` as the
-            driving procedure, expected to be answered correctly by an
-            attentive observer.
+            A `float`, in the same `intensity_units` as the driving
+            procedure, for a single-scalar-intensity test (an
+            `AdaptiveProcedure`); or a `dict[str, float]` stimulus (e.g.
+            `{"spatial_frequency_cpd": ..., "contrast": ..., "intensity":
+            ...}`, matching `QCSF.next_stimulus()`'s own shape -- see
+            `vpsych.core.trial_loop`'s docstring and section 4 of
+            `docs/WRITING_A_TEST.md`) for a `MultiParamProcedure`-driven
+            test. Either way, the value must be one an attentive observer
+            is expected to answer correctly.
         """
         raise NotImplementedError
 
