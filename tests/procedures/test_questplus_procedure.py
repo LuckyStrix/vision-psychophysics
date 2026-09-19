@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from vpsych.core.observers import PsychometricObserver
-from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
+from vpsych.core.procedures.base import ThresholdEstimate
+from vpsych.core.procedures.questplus_procedure import (
+    QuestPlusProcedure,
+    questplus_weibull_report_at_p,
+    questplus_weibull_x_at_p,
+)
 from vpsych.core.psychometric import PsychometricFunction
 
 TRUE_SLOPE = 0.3
@@ -227,3 +232,95 @@ def test_determinism_same_seed_same_trial_sequence() -> None:
     seq1 = run(123)
     seq2 = run(123)
     assert seq1 == seq2
+
+
+# --- Criterion conversion (questplus_weibull_x_at_p / report_at_p / method) ---
+
+
+def test_questplus_weibull_x_at_p_recovers_threshold_at_its_own_natural_point() -> None:
+    """At `p_target` == questplus's own ~63.2%-of-range anchor, `x == threshold` exactly."""
+    threshold, slope, guess, lapse = -1.0, 0.4, 0.5, 0.02
+    natural_p = guess + (1.0 - guess - lapse) * (1.0 - np.exp(-1.0))
+    x = questplus_weibull_x_at_p(threshold, slope, guess, lapse, natural_p)
+    assert x == pytest.approx(threshold, abs=1e-9)
+
+
+def test_questplus_weibull_x_at_p_matches_questplus_own_formula() -> None:
+    """Round-trips: invert for x at p, then evaluate questplus's own forward formula at x."""
+    threshold, slope, guess, lapse = -0.8, 0.35, 0.25, 0.03
+    for p_target in (0.4, 0.5, 0.6, 0.75, 0.9):
+        x = questplus_weibull_x_at_p(threshold, slope, guess, lapse, p_target)
+        p_forward = (
+            1.0 - lapse - (1.0 - guess - lapse) * np.exp(-(10.0 ** (slope * (x - threshold))))
+        )
+        assert p_forward == pytest.approx(p_target, abs=1e-6)
+
+
+def test_questplus_weibull_x_at_p_differs_from_vpsych_own_intensity_at_p_correct() -> None:
+    """The whole point of item 1: these two inversions are NOT interchangeable."""
+    from vpsych.core.psychometric import intensity_at_p_correct
+
+    threshold, slope, guess, lapse = -1.0, 0.4, 0.5, 0.02
+    p_target = 0.75
+    x_native = questplus_weibull_x_at_p(threshold, slope, guess, lapse, p_target)
+    fn = PsychometricFunction(
+        family="weibull",
+        threshold=threshold,
+        slope=slope,
+        guess=guess,
+        lapse=lapse,
+        intensity_scale="log10",
+    )
+    x_vpsych_family = intensity_at_p_correct(fn, p_target)
+    assert x_native != pytest.approx(x_vpsych_family, abs=1e-3)
+
+
+def test_questplus_weibull_report_at_p_shifts_ci_by_same_amount_as_point() -> None:
+    est = ThresholdEstimate(
+        value=-1.0,
+        ci_low=-1.3,
+        ci_high=-0.7,
+        ci_level=0.95,
+        units="log10_contrast",
+        method="quest_plus_posterior_mean",
+        extra={"slope": 0.4, "lapse_rate": 0.02},
+    )
+    reported, ci_low, ci_high = questplus_weibull_report_at_p(est, guess=0.5, p_target=0.75)
+    shift = reported - est.value
+    assert ci_low == pytest.approx(est.ci_low + shift)
+    assert ci_high == pytest.approx(est.ci_high + shift)
+    assert ci_low <= reported <= ci_high
+
+
+def test_procedure_intensity_at_p_correct_recovers_true_threshold_at_native_anchor() -> None:
+    """Sanity: the method's result at the native anchor p matches raw estimate().value."""
+    fn = _true_function(-1.0)
+    obs = PsychometricObserver(fn, n_afc=2)
+    rng = np.random.default_rng(7)
+    proc = _make_proc(max_trials=40)
+    _run(proc, obs, rng)
+    est = proc.estimate()
+    lapse = float(est.extra["lapse_rate"])
+    natural_p = GUESS + (1.0 - GUESS - lapse) * (1.0 - np.exp(-1.0))
+    reported, ci_low, ci_high = proc.intensity_at_p_correct(natural_p)
+    assert reported == pytest.approx(est.value, abs=1e-6)
+    assert ci_low == pytest.approx(est.ci_low, abs=1e-6)
+    assert ci_high == pytest.approx(est.ci_high, abs=1e-6)
+    # And a different p_target genuinely gives a different reported value, since
+    # slope != 0 -- guards against a no-op stub implementation.
+    reported_75, _, _ = proc.intensity_at_p_correct(0.75)
+    assert reported_75 != pytest.approx(reported, abs=1e-6)
+
+
+def test_procedure_intensity_at_p_correct_rejects_norm_cdf() -> None:
+    proc = QuestPlusProcedure(
+        intensity_values=INTENSITY_VALUES,
+        intensity_units="x",
+        threshold_values=THRESHOLD_VALUES,
+        slope_values=SLOPE_VALUES,
+        guess_rate=GUESS,
+        lapse_rate_values=LAPSE_VALUES,
+        function="norm_cdf",
+    )
+    with pytest.raises(NotImplementedError):
+        proc.intensity_at_p_correct(0.75)

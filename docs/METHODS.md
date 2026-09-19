@@ -131,6 +131,58 @@ the quantile-based interval is valid for any posterior shape.
 `state_dict()` is compact: posterior mean/SD per free parameter and the
 trial count, not the full posterior array.
 
+### Criterion conversion pitfall
+
+**This bit hard, project-wide, and is worth stating explicitly.**
+`estimate().value` for a `QuestPlusProcedure` is **not** on the same
+footing as `threshold` for a `WeightedStaircase`/`ConstantStimuli`/
+`fit_mle` fit, even though both are called "threshold" and both drive a
+`"weibull"` psychometric function. The two are genuinely different
+functional forms:
+
+- `vpsych.core.psychometric`'s own `"weibull"` family (see "Psychometric
+  function families" above) is `1 - 2**(-2**z)`, rescaled so
+  **`F(0) == 0.5` by construction** -- `threshold` is always the 50%-of-
+  the-way point between `guess` and `1 - lapse`.
+- `questplus`'s own built-in `"weibull"` function (what `QuestPlusProcedure`
+  actually fits, via the `questplus` package -- see Watson & Pelli 1983's
+  original QUEST parameterization) is
+  `p(x) = 1 - lapse - (1 - guess - lapse) * exp(-10**(slope*(x-threshold)))`.
+  At `x = threshold`, the exponent is `10**0 = 1`, so
+  `p(threshold) = guess + (1 - guess - lapse) * (1 - e^-1)` -- the
+  **~63.2%-of-the-way point**, not 50%.
+
+Passing a `QuestPlusProcedure` estimate's `threshold`/`slope`/`lapse` into
+`vpsych.core.psychometric.intensity_at_p_correct` -- which assumes the
+*other* family -- silently computes the wrong intensity for any
+`p_target` other than `questplus`'s own ~63.2% anchor. This was a real,
+shipped bug (Phase 4 fix list item 1): `motion_coherence` and
+`critical_flicker_fusion` both built a `PsychometricFunction` directly from
+a raw `QuestPlusProcedure` estimate and inverted it with
+`intensity_at_p_correct`; `color_discrimination` and
+`letter_contrast_sensitivity` both *assumed* (without conversion) that the
+raw estimate was already at the `F(0)=0.5` point, which it is not. All four
+were measurably biased as a result -- see each test's own
+`docs/methods/*.md` "Validation" section for the before/after numbers.
+
+**The fix**: `vpsych.core.procedures.questplus_procedure` provides the one
+shared, tested inversion of `questplus`'s *own* formula --
+`questplus_weibull_x_at_p(threshold, slope, guess, lapse, p_target)` (a
+module-level function) and `QuestPlusProcedure.intensity_at_p_correct
+(p_target)` (an instance method, reads `estimate()`'s own fitted
+slope/lapse) -- documented in that module's own "Criterion conversion
+pitfall" docstring section. Every `QuestPlusProcedure`-driven test in this
+battery now uses one of these, never
+`vpsych.core.psychometric.intensity_at_p_correct`, to report a threshold at
+any criterion other than `questplus`'s own native anchor.
+
+**Rule of thumb**: if code has both a `QuestPlusProcedure`
+(`vpsych.core.procedures.questplus_procedure`) and a call to
+`vpsych.core.psychometric.intensity_at_p_correct` nearby, stop and check
+which family the `PsychometricFunction` being passed to it actually came
+from. If it was built from a `QuestPlusProcedure.estimate()` result, that
+call is almost certainly this bug.
+
 ### Weighted up/down and transformed up/down staircases (`WeightedStaircase`)
 
 Implements two classic non-Bayesian adaptive rules, sharing the same
@@ -159,28 +211,41 @@ then fine).
 (`psychometric.fit_mle`, on trials aggregated to a rounded-intensity grid
 for bootstrap speed -- see `_aggregate_trials`), read off at the
 staircase's `target_p_correct` (`intensity_at_p_correct`), with the CI from
-`psychometric.bootstrap_ci` on the fitted threshold (converted the same way
-`ConstantStimuli` does). The classic reversal mean (mean of the intensities
-at the last `n_reversals_for_estimate` reversals) is still reported, in
+`psychometric.bootstrap_ci_at_p_correct` -- a **full-refit** parametric
+bootstrap that refits `threshold`/`slope`/`lapse` jointly on every resample
+and evaluates `intensity_at_p_correct` against each resample's own fitted
+function (not a `threshold`-only bootstrap interval converted while holding
+`slope`/`lapse` fixed, which an earlier version used -- see "Phase 4 fix"
+below). The classic reversal mean (mean of the intensities at the last
+`n_reversals_for_estimate` reversals) is still reported, in
 `extra["reversal_mean"]`, but **without a CI**: an earlier Student-t
 interval on those reversal values (`mean +/- t_(n-1, 1-alpha/2) * SEM`)
 treated them as i.i.d., which they are not (each reversal is shaped by the
 run of trials since the previous one), and measured coverage was ~20-30%
 for a nominal 95% interval -- a mislabeled CI, not reported any more.
 
-**The new CI is a large, real improvement but still not fully calibrated**:
-slow validation (200 reps x 3 true thresholds) measures bias comfortably
-under 0.05 log10 units, and coverage around **0.72-0.77** for a nominal
-95%, up from ~0.2-0.3 but short of the 0.85-0.99 target other procedures
-reach with the same underlying machinery. This is not a bug: a staircase
-concentrates trials tightly around threshold *by design*, which leaves the
-fitted `slope` poorly identified, and the CI conversion (like
-`ConstantStimuli`'s) holds slope/lapse fixed at their point estimates while
-only propagating the bootstrapped threshold interval -- an approximation
-that is only good when slope uncertainty is modest, which a staircase's
-narrow dynamic range violates (unlike `ConstantStimuli`'s deliberately
-wide-spread levels). Prefer `QuestPlusProcedure` or `ConstantStimuli` where
-a fully calibrated CI matters.
+**Phase 4 fix: the CI is a large, real improvement, still short of fully
+calibrated.** The MLE-fit point estimate was already correct; its CI
+originally held slope/lapse fixed at their point estimates while
+converting a `threshold`-only bootstrap interval to the target-percent
+intensity (like `ConstantStimuli`'s CI conversion) -- an approximation
+that's only good when slope uncertainty is modest, which a staircase's
+narrow dynamic range violates (it concentrates trials tightly around
+threshold *by design*, unlike `ConstantStimuli`'s deliberately wide-spread
+levels, so `slope` is genuinely poorly identified from the data). That
+version's slow validation (200 reps x 3 true thresholds) measured coverage
+around **0.72-0.77** for a nominal 95%. `estimate()` now uses the
+full-refit `bootstrap_ci_at_p_correct` described above -- what this section
+previously flagged as a possible future improvement ("would require a
+bespoke bootstrap loop refitting per resample") -- and re-measurement (same
+200-rep/3-threshold protocol) found coverage improved to roughly
+**0.85-0.92**, with bias still comfortably under 0.05 log10 units. This is
+a substantial, real improvement, not a full fix to the 0.85-0.99 target
+other procedures reach with the same underlying machinery -- the residual
+gap is the same genuine "slope poorly identified" cause, not a remaining
+bug, and is documented plainly rather than hidden behind a widened test
+tolerance. Prefer `QuestPlusProcedure` or `ConstantStimuli` where the
+tightest possible CI calibration matters.
 
 ### Method of constant stimuli (`ConstantStimuli`)
 
@@ -325,14 +390,53 @@ checked for every procedure.
 
 ## Visual acuity
 
+See `docs/methods/visual_acuity.md` for the full method write-up (FrACT-style
+Landolt C acuity via QUEST+, ISO 8596 optotype geometry, display-resolution
+clipping, and the "Criterion conversion pitfall" section above's worked
+FrACT-criterion application, plus validation bias/coverage numbers).
+
 ## Contrast sensitivity function (qCSF)
+
+See `docs/methods/contrast_sensitivity_function.md` for the full method
+write-up (the qCSF Bayesian adaptive method, spatial-frequency grid
+derivation, gamma linearization/dithering, and validation bias numbers).
 
 ## Letter contrast sensitivity
 
+See `docs/methods/letter_contrast_sensitivity.md` for the full method
+write-up (Pelli-Robson-style 10AFC Sloan-letter contrast sensitivity via
+QUEST+, procedural letter rendering, and the "Output and threshold
+criterion" section's worked application of the "Criterion conversion
+pitfall" above).
+
 ## Color discrimination
+
+See `docs/methods/color_discrimination.md` for the full method write-up
+(Cambridge Colour Test-style trivector chromatic discrimination, three
+interleaved QUEST+ procedures, block-randomized axis allocation, and the
+"Interleaving and threshold criterion" section's worked application of the
+"Criterion conversion pitfall" above).
 
 ## Motion coherence
 
+See `docs/methods/motion_coherence.md` for the full method write-up
+(random-dot kinematogram direction-discrimination threshold, noise-dot
+algorithm, `d_max` correspondence limit, and the "Validation" section's
+honest before/after bias-coverage numbers from the Phase 4 criterion-
+conversion fix).
+
 ## Vernier acuity
 
+See `docs/methods/vernier_acuity.md` for the full method write-up (2AFC
+lateral-offset hyperacuity via QUEST+, sub-pixel-accurate analytically
+area-sampled rendering, and the self-linearizing gamma correction
+`vernier_acuity.texture` now uses -- see that module's docstring for the
+Phase 4 gamma-ramp decision).
+
 ## Critical flicker fusion
+
+See `docs/methods/critical_flicker_fusion.md` for the full method write-up
+(frame-sampled flicker-detection threshold in Hz, the display's "usable
+ceiling" and display-limited lower-bound reporting, and the "Validation"
+section's honest before/after bias-coverage numbers from the Phase 4
+criterion-conversion fix).

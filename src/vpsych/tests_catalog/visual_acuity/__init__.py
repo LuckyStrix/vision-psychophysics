@@ -27,7 +27,9 @@ functional form from `vpsych.core.psychometric`'s own weibull family
 `docs/METHODS.md`'s "Psychometric function families" section) whose
 `threshold` sits instead at the *classic* Weibull inflection (`1 -
 exp(-1) ~= 63.2%` of the way from guess to ceiling) -- so this module
-inverts `questplus`'s own formula directly, in `_questplus_weibull_x_at_p`,
+inverts `questplus`'s own formula directly, via the shared, tested
+`vpsych.core.procedures.questplus_procedure.QuestPlusProcedure
+.intensity_at_p_correct` (which itself wraps `questplus_weibull_x_at_p`),
 rather than reusing `vpsych.core.psychometric.intensity_at_p_correct`
 (which assumes the other, differently-parameterized family and would give
 a silently wrong answer here). See `_fract_criterion_threshold` below.
@@ -47,13 +49,13 @@ this.
 
 from __future__ import annotations
 
-import math
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import QualityFlag, TestSummary
@@ -95,7 +97,7 @@ ARROW_KEY_BY_ANGLE_4: dict[int, str] = {0: "right", 90: "up", 180: "left", 270: 
 #: exponent applied to the *linear* (untransformed) stimulus ratio: passing
 #: `x = log10(gap_arcmin)` with `stim_scale="log10"` makes
 #: `10**(slope*(x-threshold)) == (gap_arcmin / threshold_gap_arcmin)**slope`
-#: exactly (see `_questplus_weibull_x_at_p`'s docstring) -- i.e. this *is*
+#: exactly (see `questplus_weibull_x_at_p`'s docstring) -- i.e. this *is*
 #: the standard literature Weibull-on-linear-MAR acuity model, just driven
 #: adaptively on the convenient log axis (Watson & Pelli 1983's QUEST
 #: design). Typical human psychometric slopes for Landolt C/letter acuity
@@ -111,45 +113,6 @@ DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.5, 6.0, 6)]
 DEFAULT_LAPSE_RATE_VALUES = [0.0, 0.02, 0.04]
 DEFAULT_N_INTENSITY_LEVELS = 25
 DEFAULT_N_THRESHOLD_LEVELS = 17
-
-
-def _questplus_weibull_x_at_p(
-    threshold: float, slope: float, guess: float, lapse: float, p_target: float
-) -> float:
-    """Invert `questplus`'s own log10-scale Weibull formula for `x` at a target p-correct.
-
-    `questplus`'s `weibull` psychometric function (`scale="log10"`, Watson &
-    Pelli 1983's original QUEST parameterization; see
-    `questplus.psychometric_function.weibull`) is
-
-        p(x) = 1 - lapse - (1 - guess - lapse) * exp(-10**(slope * (x - threshold)))
-
-    Solving for `x`:
-
-        x = threshold + log10(-ln((1 - p_target - lapse) / (1 - guess - lapse))) / slope
-
-    This is a *different* functional form from `vpsych.core.psychometric`'s
-    own weibull family (rescaled so `F(0) = 0.5`; see module docstring), so
-    it is inverted here directly rather than via
-    `vpsych.core.psychometric.intensity_at_p_correct`, which assumes that
-    other parameterization and would give a silently wrong answer applied
-    to `QuestPlusProcedure`'s own fitted parameters.
-
-    Args:
-        threshold: `QuestPlusProcedure`'s own (native, ~63.2%-point)
-            threshold estimate.
-        slope: `QuestPlusProcedure`'s own slope estimate.
-        guess: Fixed guess (chance) rate.
-        lapse: `QuestPlusProcedure`'s own lapse-rate estimate.
-        p_target: Target probability correct to solve for.
-
-    Returns:
-        The intensity `x` at which `p(x) == p_target`.
-    """
-    denom = 1.0 - guess - lapse
-    q = (1.0 - p_target - lapse) / denom if denom > 0 else 0.5
-    q = min(max(q, 1e-12), 1.0 - 1e-12)
-    return threshold + math.log10(-math.log(q)) / slope
 
 
 class VisualAcuityParams(BaseModel):
@@ -504,21 +467,18 @@ class VisualAcuityTest(PsychophysicalTest):
         return self.spec.description_participant
 
     def _fract_criterion_threshold(
-        self, raw_threshold: float, ci_low: float, ci_high: float, slope: float, lapse: float
+        self, procedure: QuestPlusProcedure, raw_estimate: ThresholdEstimate, lapse: float
     ) -> tuple[float, float, float, float]:
         """Convert QUEST+'s native-Weibull threshold to the FrACT criterion (see module docstring).
 
         Returns `(reported_threshold, reported_ci_low, reported_ci_high, target_p_correct)`.
-        The CI bounds are shifted by the same amount as the point estimate, holding
-        slope/lapse fixed at their point estimates -- the same approximation
-        `ConstantStimuli`/`WeightedStaircase` use to convert a bootstrap CI on their own
-        natural threshold point to one at an arbitrary target proportion correct (see
-        `docs/METHODS.md`'s "Adaptive procedures" section).
+        Delegates to `QuestPlusProcedure.intensity_at_p_correct`, the shared,
+        tested inversion of `questplus`'s own Weibull formula (see that
+        method's docstring for the CI-shift approximation it uses).
         """
         target_p = self.guess_rate + 0.5 * (1.0 - self.guess_rate - lapse)
-        reported = _questplus_weibull_x_at_p(raw_threshold, slope, self.guess_rate, lapse, target_p)
-        shift = reported - raw_threshold
-        return reported, ci_low + shift, ci_high + shift, target_p
+        reported, ci_low, ci_high = procedure.intensity_at_p_correct(target_p)
+        return reported, ci_low, ci_high, target_p
 
     def summarize(self, trials: pd.DataFrame) -> TestSummary:
         main = trials[trials["block"] == "main"]
@@ -533,7 +493,7 @@ class VisualAcuityTest(PsychophysicalTest):
         slope = float(raw_estimate.extra["slope"])
         lapse = float(raw_estimate.extra["lapse_rate"])
         reported, ci_low, ci_high, target_p = self._fract_criterion_threshold(
-            raw_estimate.value, raw_estimate.ci_low, raw_estimate.ci_high, slope, lapse
+            procedure, raw_estimate, lapse
         )
         decimal_acuity = float(10.0 ** (-reported))
         snellen_denominator_20 = 20.0 / decimal_acuity
@@ -589,7 +549,7 @@ class VisualAcuityTest(PsychophysicalTest):
                     "method": "quest_plus_posterior_mean_at_fract_criterion",
                     "extra": {
                         **raw_estimate.extra,
-                        "raw_f0.5_threshold_logmar": raw_estimate.value,
+                        "raw_questplus_native_threshold_logmar": raw_estimate.value,
                         "target_p_correct": target_p,
                         "criterion": (
                             "p-correct midway between guess rate and 1 - lapse rate "

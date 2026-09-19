@@ -38,8 +38,11 @@ family (rescaled so its `threshold` sits at the `F(0) = 0.5` point -- see
 natural threshold point is instead the classical Weibull's `1 - exp(-1) ~=
 63.2%`-of-the-way point. This distinction matters for how this test
 reports its threshold (see below); it is documented and derived in full in
-`src/vpsych/tests_catalog/visual_acuity/__init__.py`'s module docstring
-and `_questplus_weibull_x_at_p`.
+`src/vpsych/tests_catalog/visual_acuity/__init__.py`'s module docstring and
+`vpsych.core.procedures.questplus_procedure.questplus_weibull_x_at_p` (the
+shared, tested inversion this test uses via
+`QuestPlusProcedure.intensity_at_p_correct` -- see `docs/METHODS.md`'s
+"Criterion conversion pitfall" section).
 
 Guess rate is fixed by task design: `1/8` for the default 8AFC
 (orientation in 45-degree steps), or `1/4` for 4AFC (cardinal directions
@@ -66,11 +69,14 @@ guess rate and 100% correct:
 target_p = guess_rate + 0.5 * (1 - guess_rate - lapse_rate)
 ```
 
-This is inverted against `questplus`'s own Weibull formula (not
-`vpsych.core.psychometric.intensity_at_p_correct`, which assumes the
+This is inverted against `questplus`'s own Weibull formula via the shared,
+tested `QuestPlusProcedure.intensity_at_p_correct`
+(`vpsych.core.procedures.questplus_procedure.questplus_weibull_x_at_p`) --
+not `vpsych.core.psychometric.intensity_at_p_correct`, which assumes the
 differently-parameterized rescaled family and would give a silently wrong
-answer applied to `QuestPlusProcedure`'s own fitted parameters -- see
-`_questplus_weibull_x_at_p`), using the posterior's own point estimates of
+answer applied to `QuestPlusProcedure`'s own fitted parameters (see
+`docs/METHODS.md`'s "Criterion conversion pitfall" section) -- using the
+posterior's own point estimates of
 slope and lapse rate. The reported credible interval is the same
 equal-tailed interval `QuestPlusProcedure.estimate()` computes on its own
 native (~63.2%-point) threshold, shifted by the same constant offset as the

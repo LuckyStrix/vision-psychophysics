@@ -38,16 +38,127 @@ scale, not just the free-text `intensity_units` label) and
 "posterior mean (or mode, configurable)" requirement) are added as optional
 keyword arguments with defaults (`"log10"`, `"mean"`) preserving
 call-compatibility with the frozen signature.
+
+Criterion conversion pitfall
+-----------------------------
+`estimate().value` is `questplus`'s own native Weibull `threshold`
+parameter -- the intensity at which *its* formula (`function="weibull"`,
+`stim_scale="log10"`)
+
+    p(x) = 1 - lapse - (1 - guess - lapse) * exp(-10**(slope * (x - threshold)))
+
+evaluates to `guess + (1 - guess - lapse) * (1 - exp(-1))`, i.e. the
+*classic* ~63.2%-of-the-way-from-guess-to-ceiling point. This is a
+genuinely different functional form from `vpsych.core.psychometric`'s own
+`"weibull"` family (a Gumbel-type sigmoid on radix 2, rescaled so
+`F(0) == 0.5` -- see that module's docstring), whose `threshold` sits at
+the halfway point instead. **They are not interchangeable.** Passing a
+`ThresholdEstimate` from this procedure into
+`vpsych.core.psychometric.intensity_at_p_correct` (which assumes the
+`vpsych.core.psychometric` family) silently returns the wrong intensity for
+any `p_target != questplus`'s own ~63.2% anchor.
+
+To report this procedure's threshold at a different, conventional
+%-correct criterion (e.g. 75% for 2AFC, or the "FrACT" midpoint
+`guess + 0.5 * (1 - guess - lapse)` used to match `vpsych.core.psychometric`
+`F(0) = 0.5`-equivalent thresholds), invert `questplus`'s *own* formula
+directly via `questplus_weibull_x_at_p` (module-level function below) or
+`QuestPlusProcedure.intensity_at_p_correct` (instance method, reads the
+fitted slope/lapse off `self.estimate()`) -- never
+`vpsych.core.psychometric.intensity_at_p_correct`. See
+`docs/METHODS.md`'s "Adaptive procedures" section for the same pitfall
+written up for readers of the methods doc.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 import numpy as np
 from questplus import QuestPlus
 
 from vpsych.core.procedures.base import ThresholdEstimate
+
+
+def questplus_weibull_x_at_p(
+    threshold: float, slope: float, guess: float, lapse: float, p_target: float
+) -> float:
+    """Invert `questplus`'s own log10-scale Weibull formula for `x` at a target p-correct.
+
+    `questplus`'s `weibull` psychometric function (`scale="log10"`, Watson &
+    Pelli 1983's original QUEST parameterization; see
+    `questplus.psychometric_function.weibull`) is
+
+        p(x) = 1 - lapse - (1 - guess - lapse) * exp(-10**(slope * (x - threshold)))
+
+    Solving for `x`:
+
+        x = threshold + log10(-ln((1 - p_target - lapse) / (1 - guess - lapse))) / slope
+
+    This is a *different* functional form from `vpsych.core.psychometric`'s
+    own weibull family (rescaled so `F(0) = 0.5`; see that module's
+    docstring), so it must be inverted here, directly against `questplus`'s
+    own formula, rather than via
+    `vpsych.core.psychometric.intensity_at_p_correct`, which assumes that
+    other parameterization and would give a silently wrong answer applied
+    to a `QuestPlusProcedure` fit -- see this module's "Criterion
+    conversion pitfall" docstring section.
+
+    This is the one shared, tested implementation of that inversion; every
+    `vpsych` test built on `QuestPlusProcedure` (`visual_acuity`,
+    `vernier_acuity`, `letter_contrast_sensitivity`, `color_discrimination`,
+    `motion_coherence`, `critical_flicker_fusion`) should use this function
+    (typically via `QuestPlusProcedure.intensity_at_p_correct`) rather than
+    re-deriving or duplicating it locally.
+
+    Args:
+        threshold: `QuestPlusProcedure`'s own (native, ~63.2%-point)
+            threshold estimate.
+        slope: `QuestPlusProcedure`'s own slope estimate.
+        guess: Fixed guess (chance) rate.
+        lapse: `QuestPlusProcedure`'s own lapse-rate estimate.
+        p_target: Target probability correct to solve for.
+
+    Returns:
+        The intensity `x` at which `p(x) == p_target`.
+    """
+    denom = 1.0 - guess - lapse
+    q = (1.0 - p_target - lapse) / denom if denom > 0 else 0.5
+    q = min(max(q, 1e-12), 1.0 - 1e-12)
+    return threshold + math.log10(-math.log(q)) / slope
+
+
+def questplus_weibull_report_at_p(
+    estimate: ThresholdEstimate, guess: float, p_target: float
+) -> tuple[float, float, float]:
+    """Convert a `QuestPlusProcedure` `ThresholdEstimate` to the intensity at `p_target` correct.
+
+    Wraps `questplus_weibull_x_at_p` for the common case of converting a whole
+    `estimate()` result (point estimate *and* credible interval) at once: the
+    CI bounds are shifted by the same amount as the point estimate, holding
+    the fitted slope/lapse rate fixed at their point estimates -- the same
+    approximation `ConstantStimuli`/`WeightedStaircase` use to convert a
+    bootstrap CI on their own natural threshold point to one at an arbitrary
+    target proportion correct (see `docs/METHODS.md`'s "Adaptive procedures"
+    section).
+
+    Args:
+        estimate: A `QuestPlusProcedure.estimate()` result (must carry
+            `extra["slope"]`/`extra["lapse_rate"]`, as `QuestPlusProcedure`'s
+            own `estimate()` always does).
+        guess: Fixed guess (chance) rate.
+        p_target: Target probability correct to solve for.
+
+    Returns:
+        `(reported_value, ci_low, ci_high)`, all on `estimate`'s own units.
+    """
+    slope = float(estimate.extra["slope"])
+    lapse = float(estimate.extra["lapse_rate"])
+    reported = questplus_weibull_x_at_p(estimate.value, slope, guess, lapse, p_target)
+    shift = reported - estimate.value
+    return reported, estimate.ci_low + shift, estimate.ci_high + shift
+
 
 PsychometricFamily = Literal["weibull", "logistic", "norm_cdf"]
 
@@ -270,6 +381,38 @@ class QuestPlusProcedure:
                 ),
             },
         )
+
+    def intensity_at_p_correct(self, p_target: float) -> tuple[float, float, float]:
+        """Report this procedure's threshold at an arbitrary target proportion correct.
+
+        Inverts `questplus`'s own fitted Weibull directly (see
+        `questplus_weibull_x_at_p` and this module's "Criterion conversion
+        pitfall" docstring section) -- **not**
+        `vpsych.core.psychometric.intensity_at_p_correct`, which assumes a
+        different, incompatible parameterization and would silently return
+        the wrong intensity applied to this procedure's fit.
+
+        Only supported for `function="weibull"` (the `"norm_cdf"` function
+        has its own, different formula this inversion doesn't handle).
+
+        Args:
+            p_target: Target probability correct, e.g. `0.75` for the
+                conventional 2AFC criterion, or
+                `self.guess_rate + 0.5 * (1 - self.guess_rate - lapse)` for
+                the criterion equivalent to `vpsych.core.psychometric`'s own
+                `F(0) = 0.5` convention (the "FrACT" midpoint).
+
+        Returns:
+            `(reported_value, ci_low, ci_high)`, on `self.intensity_units`,
+            with the credible interval shifted by the same amount as the
+            point estimate (see `questplus_weibull_report_at_p`).
+        """
+        if self.function != "weibull":
+            raise NotImplementedError(
+                "intensity_at_p_correct only supports function='weibull' "
+                f"(questplus's own Weibull inversion), not {self.function!r}"
+            )
+        return questplus_weibull_report_at_p(self.estimate(), self.guess_rate, p_target)
 
     def state_dict(self) -> dict[str, Any]:
         marginal = self._qp.marginal_posterior

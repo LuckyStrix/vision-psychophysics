@@ -29,7 +29,8 @@ from vpsych.core.calibration.models import (
     PrimaryChromaticity,
 )
 from vpsych.core.display import DisplayGeometry
-from vpsych.core.psychometric import PsychometricFunction, intensity_at_p_correct
+from vpsych.core.procedures.questplus_procedure import questplus_weibull_x_at_p
+from vpsych.core.psychometric import intensity_at_p_correct
 from vpsych.runner.__main__ import build_arg_parser, parse_simulated_observer_spec, run_session
 from vpsych.runner.status import RunnerExitCode
 from vpsych.tests_catalog import base as catalog_base
@@ -441,6 +442,11 @@ def test_summarize_display_limited_case_on_fixture() -> None:
 
 
 def test_reanalysis_matches_75pct_correct_conversion() -> None:
+    """The reported estimate should be the 75%-correct point on questplus's OWN fitted
+    Weibull (see QuestPlusProcedure's "Criterion conversion pitfall" docstring), not
+    vpsych.core.psychometric's incompatible F(0)=0.5-anchored family -- using the latter
+    to invert a QuestPlusProcedure fit is exactly the item-1 bug this test guards against.
+    """
     test = CriticalFlickerFusionTest(
         params=CFFParams(max_trials=40),
         display=_display(120.0),
@@ -451,18 +457,10 @@ def test_reanalysis_matches_75pct_correct_conversion() -> None:
     summary = test.summarize(df)
     if summary.estimate.extra.get("display_limited"):
         pytest.skip("fixture landed in the display-limited regime; covered separately")
-    raw_threshold_x = summary.estimate.extra["threshold_f0.5_neg_log10_hz"]
+    raw_threshold_x = summary.estimate.extra["raw_questplus_native_threshold_neg_log10_hz"]
     slope = summary.estimate.extra["slope"]
     lapse = summary.estimate.extra["lapse_rate"]
-    fn = PsychometricFunction(
-        family="weibull",
-        threshold=raw_threshold_x,
-        slope=slope,
-        guess=0.5,
-        lapse=lapse,
-        intensity_scale="log10",
-    )
-    expected_x = intensity_at_p_correct(fn, 0.75)
+    expected_x = questplus_weibull_x_at_p(raw_threshold_x, slope, 0.5, lapse, 0.75)
     expected_hz = intensity_to_frequency(expected_x)
     assert summary.estimate.value == pytest.approx(expected_hz, rel=1e-9)
 
@@ -473,55 +471,65 @@ def test_reanalysis_matches_75pct_correct_conversion() -> None:
 
 
 @pytest.mark.slow
-def test_summarize_bias_and_coverage_over_many_simulated_runs() -> None:
+@pytest.mark.parametrize("true_x", [-0.7, -0.6, -0.5])
+def test_summarize_bias_and_coverage_over_many_simulated_runs(true_x: float) -> None:
     """Bias/coverage of *this test's* x-transform + 75%-correct conversion pipeline.
+
+    Ground truth is defined directly in `questplus`'s OWN Weibull
+    parameterization (see `QuestPlusProcedure`'s "Criterion conversion
+    pitfall" docstring and `visual_acuity`/`vernier_acuity`'s
+    identically-structured validation tests) -- **not**
+    `vpsych.core.psychometric.PsychometricObserver`, which uses a
+    different, incompatible sigmoid family. An earlier version of this test
+    used the `vpsych.core.psychometric` family as ground truth, which
+    conflated two independent effects: (1) the item-1 criterion-conversion
+    bug (fixed: `summarize()` now inverts `questplus`'s own fitted curve
+    via `QuestPlusProcedure.intensity_at_p_correct` rather than
+    `vpsych.core.psychometric.intensity_at_p_correct`), and (2) an
+    unrelated family-mismatch artifact from generating data under one
+    sigmoid family while fitting another. Native-family ground truth
+    isolates (1), which is what this test is actually meant to check.
 
     Not a re-validation of QUEST+ itself (that belongs to
     tests/procedures/test_questplus_procedure.py, per docs/WRITING_A_TEST.md
     section 11) -- drives many independent simulated QUEST+ runs directly
-    (bypassing the trial loop/window for speed) against a known-truth
-    observer expressed in the transformed intensity, and checks this test's
-    summarize() (F=0.5 -> 75%-correct conversion, x -> Hz inversion, CI
-    conversion) is not wildly biased and has roughly the right ballpark of
-    coverage. Measured empirically at N=50, 50 trials/run (non-display-
-    limited runs only): mean bias +0.22 log10(Hz) units (SD 0.17), 80%
-    empirical coverage of a nominal 95% CI -- honestly below nominal (see
-    docs/methods/critical_flicker_fusion.md "Validation" for why: the CI
-    conversion applies a single additive offset to the raw QUEST+ credible
-    interval, which is only an approximation once combined with the
-    x = -log10(f) transform's nonlinearity, and 50 trials is a modest
-    budget for a 2-D-ish (threshold + slope + lapse) posterior). This test
+    (bypassing the trial loop/window for speed). Measured empirically
+    (N=30/true value, 50 trials/run, run with `OPENBLAS_NUM_THREADS=1`)
+    after the item-1 fix -- see docs/methods/critical_flicker_fusion.md
+    "Validation" for the full before/after table and discussion. This test
     guards against a gross regression, not a tight calibration target.
-    Run with OPENBLAS_NUM_THREADS=1 per CONTRIBUTING.md.
     """
-    from vpsych.core.observers import PsychometricObserver
-
     display = _display(120.0)
-    test = CriticalFlickerFusionTest(
-        params=CFFParams(max_trials=50),
-        display=display,
-        calibration=_calibration(),
-        rng=np.random.default_rng(0),
-    )
-    true_fn = PsychometricFunction(
-        family="weibull", threshold=-1.0, slope=0.25, guess=0.5, lapse=0.02, intensity_scale="log10"
-    )
-    target_x = intensity_at_p_correct(true_fn, 0.75)
-    target_log10hz = -target_x  # log10(f) = -x
+    cal = _calibration()
+    n_runs = 30
+    slope_true = 0.25
+    lapse_true = 0.02
+    guess = 0.5
 
-    n_runs = 40
+    def p_correct(x: float) -> float:
+        return (
+            1.0
+            - lapse_true
+            - (1.0 - guess - lapse_true) * math.exp(-(10.0 ** (slope_true * (x - true_x))))
+        )
+
     biases = []
     coverages = []
     n_display_limited = 0
     for seed in range(n_runs):
-        observer = PsychometricObserver(true_fn, n_afc=2)
-        rng = np.random.default_rng(seed)
+        rng = np.random.default_rng(6000 + seed)
+        test = CriticalFlickerFusionTest(
+            params=CFFParams(max_trials=50),
+            display=display,
+            calibration=cal,
+            rng=np.random.default_rng(0),
+        )
         procedure = test.make_procedure()
         rows = []
         i = 0
         while not procedure.finished:
             x = procedure.next_intensity()
-            correct = observer.decide_correct({"intensity": x}, rng)
+            correct = bool(rng.random() < p_correct(x))
             procedure.update(x, correct)
             rows.append(
                 {
@@ -540,11 +548,13 @@ def test_summarize_bias_and_coverage_over_many_simulated_runs() -> None:
         if summary.estimate.extra.get("display_limited"):
             n_display_limited += 1
             continue
-        est_log10hz = math.log10(summary.estimate.value)
-        ci_low_log10hz = math.log10(summary.estimate.ci_low)
-        ci_high_log10hz = math.log10(summary.estimate.ci_high)
-        biases.append(est_log10hz - target_log10hz)
-        coverages.append(ci_low_log10hz <= target_log10hz <= ci_high_log10hz)
+        est_x = frequency_to_intensity(summary.estimate.value)
+        ci_low_x = frequency_to_intensity(summary.estimate.ci_low)
+        ci_high_x = frequency_to_intensity(summary.estimate.ci_high)
+        true_at_75 = questplus_weibull_x_at_p(true_x, slope_true, guess, lapse_true, 0.75)
+        biases.append(est_x - true_at_75)
+        # x = -log10(f) is decreasing in f, so the Hz-domain CI bounds swap order in x.
+        coverages.append(min(ci_low_x, ci_high_x) <= true_at_75 <= max(ci_low_x, ci_high_x))
 
     assert len(biases) >= n_runs // 2, (
         f"too many runs ({n_display_limited}/{n_runs}) landed in the display-limited regime "
@@ -552,7 +562,9 @@ def test_summarize_bias_and_coverage_over_many_simulated_runs() -> None:
     )
     mean_bias = float(np.mean(biases))
     coverage_rate = float(np.mean(coverages))
-    assert abs(mean_bias) < 0.4, f"mean bias {mean_bias:.3f} log10(Hz) units is too large"
+    assert abs(mean_bias) < 0.4, (
+        f"mean bias {mean_bias:.3f} log10(Hz)-equivalent units is too large"
+    )
     assert coverage_rate >= 0.5, f"empirical coverage {coverage_rate:.2f} far below nominal 0.95"
 
 

@@ -16,33 +16,31 @@ This module is pure numpy/pydantic-adjacent code (no `psychopy` import), so
 it -- and everything in it -- is exercised directly by headless unit tests
 (see `tests/tests_catalog/test_contrast_rendering.py`).
 
-**Shared-code notes for other test implementers** (reported, not fixed,
-here -- see `docs/WRITING_A_TEST.md` section on not modifying files outside
-one's own package):
+**Shared-code notes for other test implementers** (both resolved as of the
+Phase 4 fix list; see `docs/WRITING_A_TEST.md` section 7 for the current,
+accurate description):
 
-1. `vpsych.core.calibration.gamma` has no built-in constructor from a
-   *stored* `vpsych.core.calibration.models.GammaCalibration` straight to a
-   `GammaChannelModel` -- callers only ever get one back from
-   `fit_gamma`/`fit_gamma_lookup` at calibration time itself.
-   `gamma_channel_model_from_calibration` below fills that gap locally
-   (averaging `gamma_r`/`gamma_g`/`gamma_b` when `gamma_single` is absent,
-   since both tests using this module render grayscale, R=G=B, stimuli
-   only). A third test needing the same conversion would probably be
-   better served by promoting this to `core/calibration/gamma.py` instead
-   of copying it again.
-2. `vpsych.core.trial_loop.PsychoPyBackend.__init__` does not currently set
-   a window gamma ramp at all (no `win.gammaRamp` / monitor gamma-grid call
-   anywhere in it). `docs/WRITING_A_TEST.md` section 7 describes gamma
-   linearization as happening "at window-creation time... not typically
-   inside your test", but that hook does not actually exist yet. Both
-   tests using this module therefore do their own full linearization in
-   Python -- computing final, already-gamma-correct, already-dithered
-   drive levels in `[0, 1]` -- and hand PsychoPy the result directly as a
-   raw image array with no further color-space transform, the same pattern
-   `tests_catalog._example` uses for its single scalar contrast value. This
-   works today because an unconfigured `psychopy.visual.Window` applies no
-   additional gamma correction of its own, but it means every
-   gamma-dependent test must repeat this logic.
+1. `gamma_channel_model_from_calibration` -- a constructor from a *stored*
+   `vpsych.core.calibration.models.GammaCalibration` straight to a
+   `GammaChannelModel` -- was originally implemented privately here (this
+   module never had one otherwise). It is now promoted to
+   `vpsych.core.calibration.gamma`, re-exported below for backward
+   compatibility with this module's existing callers
+   (`contrast_sensitivity_function`, `letter_contrast_sensitivity`), and
+   also used by `vernier_acuity` (see note 2).
+2. Every gamma-dependent test in this suite (`contrast_sensitivity_function`,
+   `letter_contrast_sensitivity` via this module, `color_discrimination`,
+   and now `vernier_acuity`) does its own full linearization in Python --
+   computing final, already-gamma-correct (and, where relevant,
+   already-dithered) drive levels -- and hands PsychoPy the result directly
+   as a raw image array with no further color-space transform.
+   `vpsych.core.trial_loop.PsychoPyBackend` intentionally never sets a
+   window gamma ramp of its own: an unconfigured `psychopy.visual.Window`
+   applies no additional gamma correction, which is exactly what makes this
+   self-linearizing pattern correct. (An earlier version of `vernier_acuity`
+   assumed the opposite -- a window-level ramp it never actually got --
+   which was a real, now-fixed inconsistency; see that test's module
+   docstring.)
 """
 
 from __future__ import annotations
@@ -51,8 +49,11 @@ import numpy as np
 import numpy.typing as npt
 
 from vpsych.core.calibration.dither import dither_to_uint8
-from vpsych.core.calibration.gamma import GammaChannelModel, linearize
-from vpsych.core.calibration.models import GammaCalibration
+from vpsych.core.calibration.gamma import (
+    GammaChannelModel,
+    gamma_channel_model_from_calibration,
+    linearize,
+)
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -60,52 +61,9 @@ FloatArray = npt.NDArray[np.float64]
 # Gamma linearization
 # ---------------------------------------------------------------------------
 
-
-def gamma_channel_model_from_calibration(gamma_cal: GammaCalibration) -> GammaChannelModel:
-    """Build a grayscale `GammaChannelModel` from a stored `GammaCalibration`.
-
-    Both tests in this module render grayscale (R=G=B driven identically)
-    stimuli, so a single combined channel model is enough: `gamma_single`
-    is used directly when present (the common case for both grade A
-    combined-channel photometer fits and grade B psychophysical estimates,
-    see `docs/CALIBRATION.md`); otherwise the mean of whichever of
-    `gamma_r`/`gamma_g`/`gamma_b` are set is used (documented
-    simplification -- see this module's docstring).
-
-    Args:
-        gamma_cal: The active calibration's gamma characterization. Must
-            not be `method="none"` (callers should have already checked
-            `TestRequirements.needs_gamma_calibration` via
-            `vpsych.tests_catalog.base.check_requirements`).
-
-    Returns:
-        A parametric `GammaChannelModel` usable with `linearize`.
-
-    Raises:
-        ValueError: If `gamma_cal.method == "none"`, or neither
-            `gamma_single` nor any per-channel gamma is set.
-    """
-    if gamma_cal.method == "none":
-        raise ValueError(
-            "Cannot linearize against an uncalibrated (method='none') GammaCalibration; "
-            "this test declares TestRequirements.needs_gamma_calibration=True and should "
-            "never be constructed against one."
-        )
-    if gamma_cal.gamma_single is not None:
-        gamma = gamma_cal.gamma_single
-    else:
-        per_channel = [
-            v for v in (gamma_cal.gamma_r, gamma_cal.gamma_g, gamma_cal.gamma_b) if v is not None
-        ]
-        if not per_channel:
-            raise ValueError(
-                "GammaCalibration has neither gamma_single nor any per-channel gamma set; "
-                "cannot build a GammaChannelModel from it."
-            )
-        gamma = float(np.mean(per_channel))
-    return GammaChannelModel(
-        lum_min_cdm2=gamma_cal.lum_min_cdm2, lum_max_cdm2=gamma_cal.lum_max_cdm2, gamma=gamma
-    )
+__all__ = [
+    "gamma_channel_model_from_calibration",  # re-exported from core.calibration.gamma
+]
 
 
 def mean_luminance_cdm2(model: GammaChannelModel) -> float:

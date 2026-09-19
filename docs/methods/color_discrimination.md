@@ -37,16 +37,21 @@ composed by this package's own `TrivectorProcedure`
 (`vpsych.tests_catalog.color_discrimination.procedure`), a small
 `vpsych.core.procedures.base.MultiParamProcedure` implemented entirely
 inside this test package (see "Implementation notes" below for why this was
-necessary). Each trial, the axis to test is drawn uniformly at random; the
-QUEST+ procedure for that axis alone selects the next intensity and is
-updated with the outcome. Each axis's psychometric function is the
-project-standard fixed-guess-rate Weibull-family function (see
-`docs/METHODS.md`'s "Psychometric function families" section):
+necessary). Each trial, the axis to test is drawn via **block
+randomization** (a shuffled bag of one copy of each axis, refilled whenever
+exhausted -- see "Interleaving and threshold criterion" below for why this
+replaced an earlier uniform-random draw); the QUEST+ procedure for that
+axis alone selects the next intensity and is updated with the outcome.
+Each axis's psychometric function is `questplus`'s own native Weibull
+(fitted internally by `QuestPlusProcedure` -- **not**
+`vpsych.core.psychometric`'s own, differently-parameterized `weibull`
+family; see "Interleaving and threshold criterion" below and
+`vpsych.core.procedures.questplus_procedure`'s "Criterion conversion
+pitfall" docstring section for the distinction and why it matters):
 
 ```
-p(x) = guess + (1 - guess - lapse) * F((x - threshold) / slope)
+p(x) = 1 - lapse - (1 - guess - lapse) * exp(-10**(slope * (x - threshold)))
 guess = 0.25   (4AFC)
-F(z) = 1 - 2**(-2**z)     (Weibull-family sigmoid, F(0) = 0.5 by construction)
 x = log10(displacement), displacement in u'v' x 1e-4 units
 ```
 
@@ -188,33 +193,41 @@ axis), each on its own intensity/threshold/slope grid (20 intensity levels,
 `[5, axis_max]` range; slope grid `[0.2, 0.35, 0.5, 0.65, 0.8]`; lapse-rate
 grid `[0.0, 0.02, 0.04]` -- implementation choices in the same spirit as
 `vpsych.tests_catalog._example`'s illustrative grids, not derived from a
-specific published CCT slope estimate). `next_stimulus()` draws the axis
-uniformly at random each trial (via the same `rng` object the owning test's
-`present()` receives through `trial_ctx["rng"]`, so the axis sequence is
-reproducible from the session's logged seed) and returns
-`{"axis": 0|1|2, "intensity": log10(displacement)}`; `update()` routes the
-outcome to the drawn axis's own `QuestPlusProcedure`. Each axis therefore
-receives, on average, one third of the session's total trial budget, though
-the realized split fluctuates trial to trial (this is an accepted design
-choice, mirroring the real CCT's own interleaving).
+specific published CCT slope estimate). `next_stimulus()` draws the axis via
+**block randomization** each trial (via the same `rng` object the owning
+test's `present()` receives through `trial_ctx["rng"]`, so the axis
+sequence is reproducible from the session's logged seed): a shuffled bag of
+exactly one copy of each axis, refilled with a fresh shuffle whenever
+exhausted, so every consecutive block of 3 trials tests each axis exactly
+once (only a session's final, possibly-partial block can be uneven, by at
+most 1 trial). With the default `max_trials=180` (a multiple of 3), every
+axis gets *exactly* 60 trials, not just 60 on average -- see "Validation"
+below for why this replaced an earlier plain `rng.integers(3)` draw (a real,
+measured source of per-axis bias, not just a theoretical concern).
+`next_stimulus()` returns `{"axis": 0|1|2, "intensity": log10(displacement)}`;
+`update()` routes the outcome to the drawn axis's own `QuestPlusProcedure`.
 
-**Criterion**: every psychometric family this project uses is parameterized
-so `F(0) == 0.5` (see `docs/METHODS.md`), which means the raw QUEST+
-`threshold` parameter is *already* the intensity at
-`p_correct = guess + (1 - guess - lapse) * 0.5` -- exactly halfway between
-the guess rate (0.25) and `1 - lapse_rate`. This is a direct algebraic
-consequence, not a coincidence: `intensity_at_p_correct(fn, p_mid)` (where
-`p_mid` is that midpoint) evaluates to `fn.threshold + fn.slope * z` with
-`z = F^-1(0.5) = 0` for every family this project supports, so it always
-reduces to `fn.threshold` unchanged. `TrivectorProcedure.estimate()` reports
-each axis's raw QUEST+ threshold directly, with no further conversion
-needed, and documents this identity in its own docstring. **This differs
-from the original CCT's own criterion**, an 11-reversal 1-up/1-down
-transformed staircase (Levitt 1971) whose reversal mean targets ~50% of the
-tested range at equilibrium, not a fitted-psychometric-function percent-
-correct point; the two are not the same statistic, and a threshold from this
-implementation should not be assumed numerically interchangeable with a
-published CCT threshold measured the original way.
+**Criterion**: `QuestPlusProcedure.estimate().value` is `questplus`'s own
+native Weibull threshold -- the intensity at the ~63.2%-of-range point in
+*its* parameterization (`guess + (1 - guess - lapse) * (1 - e^-1)`) -- which
+is **not** the same as `vpsych.core.psychometric`'s own `F(0) = 0.5`
+convention, despite both projects calling their respective anchor parameter
+"threshold" (see `vpsych.core.procedures.questplus_procedure`'s "Criterion
+conversion pitfall" docstring section; an earlier version of this
+paragraph incorrectly claimed the two were the same, which was itself an
+instance of that exact pitfall). To report the `F(0)=0.5`-equivalent
+criterion -- `p_correct = guess + (1 - guess - lapse) * 0.5`, exactly
+halfway between the guess rate (0.25) and `1 - lapse_rate` --
+`TrivectorProcedure.estimate()` now explicitly inverts each axis's own
+fitted `questplus` curve via `QuestPlusProcedure.intensity_at_p_correct`,
+rather than assuming (incorrectly) that the raw threshold already sits
+there. **This differs from the original CCT's own criterion**, an
+11-reversal 1-up/1-down transformed staircase (Levitt 1971) whose reversal
+mean targets ~50% of the tested range at equilibrium, not a
+fitted-psychometric-function percent-correct point; the two are not the
+same statistic, and a threshold from this implementation should not be
+assumed numerically interchangeable with a published CCT threshold measured
+the original way.
 
 **Combined estimate**: the primary `TestSummary.estimate.value` is the
 arithmetic mean of the three axes' `log10(displacement)` thresholds --
@@ -334,18 +347,49 @@ need its own explicit, display-matched calibration protocol.
 `test_trivector_procedure_recovery_bias_slow` (`@pytest.mark.slow`) runs
 `TrivectorProcedure` against a `TrivectorObserver` with known per-axis
 ground-truth thresholds (2.2/1.7/1.3 log10 `uv_x1e4` units for protan/
-deutan/tritan) for 30 simulated repetitions at the default trial budget (180
-total, i.e. ~60 trials/axis on average, since the axis is drawn at random
-each trial). A larger pilot sweep (40 repetitions) measured per-axis bias of
-about **0.13-0.18 log10 units** (SD about 0.13-0.17), somewhat higher than
-`QCSF`'s ~0.04-0.08 at 100+ trials -- consistent with substantially fewer
-trials landing on each axis here than a single-axis QUEST+/qCSF run gets.
-The committed test uses a looser bound (`|bias| < 0.35`) than that pilot's
-measured value, to avoid flaking on ordinary sampling variation (single-run
-error has SD comparable to the bias itself) while still catching a much
-larger, genuinely broken bias; a future increase in the default trial
-budget, or per-axis trial-count targets rather than pure random
-interleaving, would be the natural way to tighten this further.
+deutan/tritan) at the default trial budget (180 total).
+
+**Phase 4 fix and re-measurement.** Two independent problems were found and
+fixed together (both measured on the same 30-repetition sweep, same seeds,
+for a fair before/after comparison):
+
+1. **Criterion-conversion bug (item 1)**: `TrivectorProcedure.estimate()`
+   used to report each axis's raw, native-parameterization QUEST+ threshold
+   directly, on the mistaken belief that it was already at
+   `vpsych.core.psychometric`'s `F(0)=0.5` point (see
+   `vpsych.core.procedures.questplus_procedure`'s "Criterion conversion
+   pitfall" docstring section for why that belief was wrong). It now
+   explicitly converts via `QuestPlusProcedure.intensity_at_p_correct`.
+2. **Unbalanced interleaving (item 3)**: `next_stimulus()` used to draw the
+   axis via a plain `rng.integers(3)` each trial, which gives each axis 1/3
+   of trials only *in expectation* -- over a finite 180-trial session,
+   binomial sampling variance means axes can end up with substantially
+   unequal trial counts by chance, starving whichever axis drew short straw.
+   `TrivectorProcedure` now draws axes via block randomization (a shuffled
+   bag of one copy of each axis, refilled whenever exhausted), guaranteeing
+   every complete block of 3 trials tests each axis exactly once -- with
+   `max_trials=180` (a multiple of 3), every axis gets *exactly* 60 trials,
+   not just 60 on average.
+
+**Before** (original code, both problems present): per-axis bias about
+**0.13-0.18 log10 units** (SD about 0.13-0.17), somewhat higher than
+`QCSF`'s ~0.04-0.08 at 100+ trials.
+
+**After** (both fixes applied, same 30-repetition sweep): per-axis bias
+about **-0.05 to -0.13 log10 units** (protan -0.049, deutan -0.100, tritan
+-0.126; SD 0.11-0.22) -- roughly half the magnitude of the original bias.
+The reduction is not complete: a residual bias remains for the same reason
+`motion_coherence`/`critical_flicker_fusion` have one after their own item-1
+fix (see those tests' own "Validation" sections) -- `TrivectorObserver`
+generates data from `vpsych.core.psychometric`'s own sigmoid family while
+each axis's `QuestPlusProcedure` fits `questplus`'s different native
+family, so even a fully correct conversion and perfectly balanced
+interleaving inherit some family-shape mismatch. The committed test uses a
+looser bound (`|bias| < 0.35`) than either measurement, to avoid flaking on
+ordinary sampling variation (single-run error has SD comparable to the bias
+itself) while still catching a much larger, genuinely broken bias; a future
+increase in the default trial budget would be the natural way to tighten
+this further.
 
 `test_simulated_end_to_end_recovery_of_three_distinct_thresholds` drives a
 real `run_session()` (in-process, with a fake writer) against three visibly

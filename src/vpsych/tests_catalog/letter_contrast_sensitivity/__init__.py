@@ -315,16 +315,28 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
     def summarize(self, trials: pd.DataFrame) -> TestSummary:
         """Recompute log contrast sensitivity by replaying a fresh QUEST+ over `trials`.
 
-        Threshold criterion: `QuestPlusProcedure.estimate()` reports the
-        fitted Weibull-family psychometric function's F(0)=0.5 crossing (in
-        log10 Weber contrast) -- for guess=0.1 and a small lapse rate, this
-        corresponds to roughly 55% correct, *not* the 75%-correct point
-        conventionally used for 2AFC tasks in this suite, and *not*
-        equivalent to a real Pelli-Robson chart's triplet-scoring criterion
-        (see `docs/methods/letter_contrast_sensitivity.md`). Log contrast
-        sensitivity is then `-1 * (that log10 Weber contrast threshold)`,
-        with the CI transformed the same way (note the low/high bounds
-        swap sign and order under negation).
+        Threshold criterion: `QuestPlusProcedure.estimate().value` is
+        `questplus`'s own native Weibull threshold (in log10 Weber
+        contrast) -- the ~63.2%-of-range point in *its* parameterization,
+        which for `guess=0.1` and a small lapse rate is about **67%**
+        correct, **not** the `vpsych.core.psychometric` `F(0)=0.5` point an
+        earlier version of this docstring incorrectly claimed it already
+        was (see `vpsych.core.procedures.questplus_procedure`'s "Criterion
+        conversion pitfall" docstring section -- this was the same mistake
+        found and fixed project-wide, see item 1 of the Phase 4 fix list).
+        This test's documented criterion is the FrACT-style midpoint,
+        `p_correct = guess + 0.5 * (1 - guess - lapse_rate)` (approximately
+        55% correct for `guess=0.1`) -- equivalent to `vpsych.core
+        .psychometric`'s own `F(0)=0.5` convention, and *not* the
+        75%-correct point conventionally used for 2AFC tasks in this suite,
+        nor a real Pelli-Robson chart's triplet-scoring criterion (see
+        `docs/methods/letter_contrast_sensitivity.md`). It is now reached
+        by explicitly inverting `questplus`'s own fitted curve via
+        `QuestPlusProcedure.intensity_at_p_correct`, rather than assuming
+        (incorrectly) that the raw threshold already sits there. Log
+        contrast sensitivity is then `-1 * (that log10 Weber contrast
+        threshold)`, with the CI transformed the same way (note the
+        low/high bounds swap sign and order under negation).
         """
         main = trials[trials["block"] == "main"]
         non_catch = main[~main["is_catch"]].sort_values("trial_index")
@@ -333,26 +345,34 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
         procedure = self.make_procedure()
         for _, row in non_catch.iterrows():
             procedure.update(float(row["intensity"]), bool(row["correct"]))
-        contrast_estimate = procedure.estimate()
+        raw_estimate = procedure.estimate()
+        lapse = float(raw_estimate.extra["lapse_rate"])
+        target_p = GUESS_RATE + 0.5 * (1.0 - GUESS_RATE - lapse)
+        contrast_value, contrast_ci_low, contrast_ci_high = procedure.intensity_at_p_correct(
+            target_p
+        )
 
-        log_cs_value = -contrast_estimate.value
-        log_cs_ci_low = -contrast_estimate.ci_high
-        log_cs_ci_high = -contrast_estimate.ci_low
+        log_cs_value = -contrast_value
+        log_cs_ci_low = -contrast_ci_high
+        log_cs_ci_high = -contrast_ci_low
         estimate = ThresholdEstimate(
             value=log_cs_value,
             ci_low=log_cs_ci_low,
             ci_high=log_cs_ci_high,
-            ci_level=contrast_estimate.ci_level,
+            ci_level=raw_estimate.ci_level,
+            method="quest_plus_posterior_mean_at_fract_criterion",
             units="log10_contrast_sensitivity",
-            method=f"neg_{contrast_estimate.method}",
             extra={
-                **contrast_estimate.extra,
-                "threshold_log10_weber_contrast": contrast_estimate.value,
+                **raw_estimate.extra,
+                "raw_questplus_native_threshold_log10_weber_contrast": raw_estimate.value,
+                "threshold_log10_weber_contrast": contrast_value,
+                "target_p_correct": target_p,
                 "threshold_criterion": (
-                    "F(0)=0.5 crossing of the fitted Weibull-family psychometric function "
-                    "(vpsych.core.psychometric convention), in log10 Weber contrast; with "
-                    "guess=0.1 and a small lapse rate this is approximately the 55%-correct "
-                    "point, not 75% and not the Pelli-Robson chart's own triplet criterion."
+                    "FrACT-style midpoint, p_correct = guess + 0.5 * (1 - guess - lapse_rate) "
+                    "(equivalent to vpsych.core.psychometric's own F(0)=0.5 convention), in "
+                    "log10 Weber contrast; with guess=0.1 and a small lapse rate this is "
+                    "approximately the 55%-correct point, not 75% and not the Pelli-Robson "
+                    "chart's own triplet criterion."
                 ),
             },
         )
@@ -367,7 +387,7 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,
-            threshold=contrast_estimate.value,
+            threshold=contrast_value,
             range_min=min(DEFAULT_INTENSITY_VALUES),
             range_max=max(DEFAULT_INTENSITY_VALUES),
             n_trials=len(non_catch),
@@ -382,8 +402,8 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
             run=1,
             estimate=estimate,
             fit_params={
-                "slope_log10_contrast": contrast_estimate.extra.get("slope"),
-                "lapse_rate": contrast_estimate.extra.get("lapse_rate"),
+                "slope_log10_contrast": raw_estimate.extra.get("slope"),
+                "lapse_rate": raw_estimate.extra.get("lapse_rate"),
             },
             gof={},
             quality_flags=quality_flags,

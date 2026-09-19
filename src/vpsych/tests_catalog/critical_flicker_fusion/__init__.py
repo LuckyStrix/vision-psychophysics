@@ -34,7 +34,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from vpsych.core.calibration.gamma import GammaChannelModel, fit_gamma_lookup, linearize
 from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
-from vpsych.core.psychometric import PsychometricFunction, intensity_at_p_correct
 from vpsych.core.timing import summarize_frame_intervals
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import QualityFlag, TestSummary
@@ -473,11 +472,19 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
     def summarize(self, trials: pd.DataFrame) -> TestSummary:
         """Recompute the CFF estimate deterministically from the raw trials.
 
-        Converts the QUEST+ posterior (F=0.5 threshold on `x = -log10(f)`)
-        to the 75%-correct point via `intensity_at_p_correct`, then back to
-        Hz via `intensity_to_frequency`. If that 75%-correct frequency is at
-        or beyond this run's usable ceiling, reports a **lower bound**
-        instead of a point estimate (see the module/class docstrings and
+        `QuestPlusProcedure.estimate().value` is `questplus`'s own native
+        Weibull threshold on `x = -log10(f)` (the ~63.2%-of-range point in
+        *its* parameterization, not the `vpsych.core.psychometric`
+        `F(0)=0.5` point -- see `QuestPlusProcedure`'s "Criterion
+        conversion pitfall" docstring section). This converts that to the
+        75%-correct point via `QuestPlusProcedure.intensity_at_p_correct`,
+        which inverts `questplus`'s own formula directly -- *not*
+        `vpsych.core.psychometric.intensity_at_p_correct`, which assumes
+        the other, incompatible parameterization and would silently give
+        the wrong criterion here -- then back to Hz via
+        `intensity_to_frequency`. If that 75%-correct frequency is at or
+        beyond this run's usable ceiling, reports a **lower bound** instead
+        of a point estimate (see the module/class docstrings and
         `docs/methods/critical_flicker_fusion.md`) with a critical quality
         flag -- never a fabricated point value beyond what the display
         could actually test.
@@ -499,21 +506,9 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
         for _, row in non_catch.iterrows():
             procedure.update(float(row["intensity"]), bool(row["correct"]))
         raw_estimate = procedure.estimate()
-
         slope = float(raw_estimate.extra["slope"])
         lapse = float(raw_estimate.extra["lapse_rate"])
-        fn = PsychometricFunction(
-            family="weibull",
-            threshold=raw_estimate.value,
-            slope=slope,
-            guess=GUESS_RATE,
-            lapse=lapse,
-            intensity_scale="log10",
-        )
-        target_x = intensity_at_p_correct(fn, 0.75)
-        offset = target_x - raw_estimate.value
-        ci_low_x = raw_estimate.ci_low + offset
-        ci_high_x = raw_estimate.ci_high + offset
+        target_x, ci_low_x, ci_high_x = procedure.intensity_at_p_correct(0.75)
 
         freq_75 = intensity_to_frequency(target_x)
         # x = -log10(f) is decreasing in f, so the x-CI bounds swap order in Hz.
@@ -585,7 +580,7 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
                 method="quest_plus_posterior_mean_at_75pct_correct",
                 extra={
                     **raw_estimate.extra,
-                    "threshold_f0.5_neg_log10_hz": raw_estimate.value,
+                    "raw_questplus_native_threshold_neg_log10_hz": raw_estimate.value,
                     "target_p_correct": 0.75,
                 },
             )

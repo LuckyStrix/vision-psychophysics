@@ -25,38 +25,50 @@ centroid reproduce a requested sub-pixel position to a small fraction of a
 pixel (see `tests/tests_catalog/test_vernier_acuity.py`'s texture-centroid
 unit test, and the Phase 2A task's <=0.02 px tolerance requirement).
 
-**Gamma linearization**: each pixel's returned value is the *coverage-
-weighted linear mixture* of the background and foreground (line) luminance
-levels -- i.e. the luminance a photoreceptor pooling light linearly over
-that pixel's area would actually integrate (the same "linear spatial
-summation" principle behind this project's grade-B psychophysical gamma
-calibration, see `docs/CALIBRATION.md`'s half-luminance bisection method,
-and behind sub-pixel/antialiased rendering on gamma-nonlinear CRT and LCD
-displays generally, e.g. Lloyd, C., Winterbottom, M., Gaska, J., & Williams,
-L. (2015). Effects of display pixel pitch and antialiasing on threshold
+**Gamma linearization**: each pixel's *coverage-weighted linear mixture* of
+the background and foreground (line) luminance levels -- i.e. the luminance
+a photoreceptor pooling light linearly over that pixel's area would
+actually integrate (the same "linear spatial summation" principle behind
+this project's grade-B psychophysical gamma calibration, see
+`docs/CALIBRATION.md`'s half-luminance bisection method, and behind sub-
+pixel/antialiased rendering on gamma-nonlinear CRT and LCD displays
+generally, e.g. Lloyd, C., Winterbottom, M., Gaska, J., & Williams, L.
+(2015). Effects of display pixel pitch and antialiasing on threshold
 vernier acuity. Proceedings of the IMAGE Society Annual Conference, Dayton,
 OH -- who likewise find that antialiasing filter quality, not raw pixel
 pitch alone, sets the achievable Vernier threshold on a fixed-resolution
-display). Per `docs/WRITING_A_TEST.md` section 7, turning a *linear*
-luminance-fraction value like the one this module returns into the correct
-nonlinear hardware drive level is the window's own gamma ramp's job
-(`vpsych.core.calibration.gamma.make_gamma_ramp`, built once from
-`self.calibration.gamma` at window-creation time by the runner/backend, not
-per-trial by a test) -- this module intentionally stops at producing the
-linear-luminance-fraction texture (in PsychoPy's `[-1, 1]` color
-convention, which is itself linear-light once that ramp is active) and
-does not call `vpsych.core.calibration.gamma.linearize` itself. This is why
-`VernierAcuityTest.spec.requirements.needs_gamma_calibration` is `True`
-(grade B minimum): without an active gamma ramp built from a real
-calibration, the luminance mixture this module computes would be displayed
-through the display's *native*, uncorrected gamma curve and would no
-longer be the physically-correct linear mixture the sub-pixel encoding
-relies on.
+display) -- is computed first, in linear-light space, then turned into the
+correct nonlinear hardware drive level via
+`vpsych.core.calibration.gamma.linearize`, applied by this module itself
+(the `gamma_model` argument) if given.
+
+This is a deliberate, documented resolution of a real inconsistency: an
+earlier version of this module (and of `docs/WRITING_A_TEST.md` section 7)
+assumed gamma linearization instead happened via the *window's own* gamma
+ramp (`vpsych.core.calibration.gamma.make_gamma_ramp`, applied once at
+window-creation time by the backend, not per-trial by a test) -- but
+`PsychoPyBackend` never actually sets one, and the *other* three
+gamma-dependent tests (`contrast_sensitivity_function`,
+`letter_contrast_sensitivity` via `tests_catalog._contrast_rendering`, and
+`color_discrimination`) all do their own full linearization in Python,
+handing PsychoPy an already-gamma-correct drive-level array directly and
+relying on an *unconfigured* window applying no further correction of its
+own. Adding a window-level ramp would silently double-correct those three
+tests. This module now follows the same, already-working, already-tested
+pattern instead, for consistency across the whole battery (see
+`docs/WRITING_A_TEST.md` section 7 for the updated, accurate description):
+every real test linearizes its own stimulus in Python; `PsychoPyBackend`
+intentionally sets no window gamma ramp.
+`VernierAcuityTest.spec.requirements.needs_gamma_calibration` stays `True`
+(grade B minimum) -- the calibration is still required, just applied here
+rather than via a ramp.
 """
 
 from __future__ import annotations
 
 import numpy as np
+
+from vpsych.core.calibration.gamma import GammaChannelModel, linearize
 
 
 def line_column_coverage(canvas_width_px: int, center_px: float, width_px: float) -> np.ndarray:
@@ -92,6 +104,7 @@ def render_vertical_line_texture(
     y_end_px: float,
     background_level: float = 1.0,
     foreground_level: float = -1.0,
+    gamma_model: GammaChannelModel | None = None,
 ) -> np.ndarray:
     """Render one vertical line segment as a sub-pixel-accurate antialiased texture.
 
@@ -116,11 +129,18 @@ def render_vertical_line_texture(
             uncovered pixels (PsychoPy `[-1, 1]` convention; +1 = white).
         foreground_level: Linear luminance-fraction color value for fully
             covered (line) pixels.
+        gamma_model: If given, the coverage-weighted linear mixture is
+            gamma-linearized (via `vpsych.core.calibration.gamma.linearize`)
+            into the correct hardware drive level before being returned --
+            see module docstring's "Gamma linearization" section. `None`
+            (the default) returns the raw linear mixture unchanged, e.g. for
+            unit tests of the pure coverage geometry.
 
     Returns:
-        A `(canvas_height_px, canvas_width_px)` array of linear luminance-
-        fraction color values (see module docstring's "Gamma linearization"
-        section for what "linear" means here).
+        A `(canvas_height_px, canvas_width_px)` array of PsychoPy `[-1, 1]`
+        color values: gamma-corrected hardware drive levels if `gamma_model`
+        was given, otherwise linear luminance-fraction values (see module
+        docstring's "Gamma linearization" section).
     """
     if y_end_px <= y_start_px:
         raise ValueError("y_end_px must be greater than y_start_px")
@@ -131,6 +151,12 @@ def render_vertical_line_texture(
     row_cov = np.clip(np.minimum(row_bot, y_end_px) - np.maximum(row_top, y_start_px), 0.0, 1.0)
     coverage = np.outer(row_cov, col_cov)  # (height, width)
     result: np.ndarray = background_level + coverage * (foreground_level - background_level)
+    if gamma_model is not None:
+        # PsychoPy [-1, 1] linear-luminance-fraction convention -> [0, 1] -> gamma-correct
+        # hardware drive level -> back to [-1, 1].
+        frac_0_1 = np.clip((result + 1.0) / 2.0, 0.0, 1.0)
+        drive = linearize(frac_0_1, gamma_model)
+        result = np.asarray(drive) * 2.0 - 1.0
     return result
 
 

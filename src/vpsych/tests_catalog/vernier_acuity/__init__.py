@@ -21,24 +21,32 @@ than whole-pixel stimulus positioning.
 multidimensional Bayesian adaptive psychometric method. Journal of Vision,
 17(3):10) on `log10(offset in arcsec)`, 2AFC (guess rate 0.5), Weibull
 psychometric function. `summarize` reports the offset at 75% correct, in
-arcsec, with a credible interval -- see `_questplus_weibull_x_at_p` (this
-test's own module, mirroring `visual_acuity`'s identically-named helper;
-duplicated rather than imported from shared code, per the Phase 2A task's
-instruction not to modify `core/`, since this is `questplus`'s own Weibull
-parameterization, not `vpsych.core.psychometric`'s -- see that helper's
-docstring for the full derivation).
+arcsec, with a credible interval -- via the shared, tested
+`QuestPlusProcedure.intensity_at_p_correct`
+(`vpsych.core.procedures.questplus_procedure`), which inverts `questplus`'s
+own Weibull formula directly (see that method's docstring for the full
+derivation) rather than `vpsych.core.psychometric.intensity_at_p_correct`,
+which assumes a different, incompatible parameterization. Previously this
+module duplicated its own private copy of that inversion; both
+`visual_acuity` and this test now share the one implementation in
+`core/`.
 
 **Sub-pixel rendering and gamma linearization**: see `texture.py`'s module
 docstring for the full method and citations. In short: the offset is
 encoded as an exact, analytically area-sampled edge-coverage texture (not
-GPU/backend antialiasing, and not stochastic supersampling), and the
-texture's per-pixel values are the coverage-weighted *linear* luminance
-mixture of foreground/background -- correct display output for this
-depends on the window's own gamma ramp having already linearized hardware
-luminance from a real calibration (`docs/WRITING_A_TEST.md` section 7),
-which is why this test declares `needs_gamma_calibration=True` (grade B
-minimum, i.e. either a photometer or the psychophysical half-luminance
-bisection method -- see `docs/CALIBRATION.md`).
+GPU/backend antialiasing, and not stochastic supersampling); the coverage-
+weighted *linear* luminance mixture of foreground/background is computed
+first, then this test itself (`_render_stimulus_texture`, via
+`texture.render_vertical_line_texture`'s `gamma_model` argument) converts
+that to the correct gamma-corrected hardware drive level using the active
+calibration, the same self-linearizing pattern
+`contrast_sensitivity_function`/`letter_contrast_sensitivity`/
+`color_discrimination` use -- **not** a window-level gamma ramp (see
+`docs/WRITING_A_TEST.md` section 7 for why: `PsychoPyBackend` intentionally
+never sets one). This is why this test declares
+`needs_gamma_calibration=True` (grade B minimum, i.e. either a photometer
+or the psychophysical half-luminance bisection method -- see
+`docs/CALIBRATION.md`).
 
 **Position jitter**: the whole two-segment stimulus is displaced by a small
 random amount each trial (`position_jitter_arcmin`) so absolute screen
@@ -50,13 +58,13 @@ inline comment for why sub-pixel jitter would be self-defeating here.
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from vpsych.core.calibration.gamma import gamma_channel_model_from_calibration
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import QualityFlag, TestSummary
@@ -80,25 +88,6 @@ DEFAULT_N_THRESHOLD_LEVELS = 15
 #: typically steep (small dynamic range between threshold and ceiling), so
 #: this grid leans toward somewhat higher beta than the acuity test's.
 DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(1.0, 8.0, 6)]
-
-
-def _questplus_weibull_x_at_p(
-    threshold: float, slope: float, guess: float, lapse: float, p_target: float
-) -> float:
-    """Invert `questplus`'s own log10-scale Weibull formula for `x` at a target p-correct.
-
-    Identical derivation to `vpsych.tests_catalog.visual_acuity`'s helper of
-    the same name (duplicated locally rather than imported, since it is not
-    shared/core code and both tests were built independently and in
-    parallel -- see that module's docstring for the full derivation):
-
-        p(x) = 1 - lapse - (1 - guess - lapse) * exp(-10**(slope * (x - threshold)))
-        x = threshold + log10(-ln((1 - p_target - lapse) / (1 - guess - lapse))) / slope
-    """
-    denom = 1.0 - guess - lapse
-    q = (1.0 - p_target - lapse) / denom if denom > 0 else 0.5
-    q = min(max(q, 1e-12), 1.0 - 1e-12)
-    return threshold + math.log10(-math.log(q)) / slope
 
 
 class VernierAcuityParams(BaseModel):
@@ -308,6 +297,14 @@ class VernierAcuityTest(PsychophysicalTest):
         (`direction` is +1 for "right", -1 for "left"). Both segments'
         edges are area-sampled (see `texture.render_vertical_line_texture`)
         so `offset_px` (which is generally sub-pixel) is encoded exactly.
+
+        Gamma-linearizes the rendered texture itself (see `texture.py`'s
+        "Gamma linearization" section and `docs/WRITING_A_TEST.md` section
+        7) when a calibration is available, matching the self-linearizing
+        pattern every other gamma-dependent test in this suite uses --
+        `self.calibration` is `None` only in unit tests that exercise pure
+        stimulus-geometry math directly, never in a real run (blocked by
+        `needs_gamma_calibration=True`).
         """
         background_level = 1.0
         foreground_level = background_level * (1.0 + self.params.weber_contrast)
@@ -316,6 +313,11 @@ class VernierAcuityTest(PsychophysicalTest):
         top_y_end = self._canvas_height_px / 2.0 - self._gap_px / 2.0
         bottom_y_start = self._canvas_height_px / 2.0 + self._gap_px / 2.0
         bottom_y_end = bottom_y_start + self._length_px
+        gamma_model = (
+            gamma_channel_model_from_calibration(self.calibration.gamma)
+            if self.calibration is not None
+            else None
+        )
 
         upper = render_vertical_line_texture(
             self._canvas_width_px,
@@ -326,6 +328,7 @@ class VernierAcuityTest(PsychophysicalTest):
             y_end_px=top_y_end,
             background_level=background_level,
             foreground_level=foreground_level,
+            gamma_model=gamma_model,
         )
         lower = render_vertical_line_texture(
             self._canvas_width_px,
@@ -336,6 +339,7 @@ class VernierAcuityTest(PsychophysicalTest):
             y_end_px=bottom_y_end,
             background_level=background_level,
             foreground_level=foreground_level,
+            gamma_model=gamma_model,
         )
         # Combine: a pixel belongs to whichever segment covers it (segments
         # don't overlap vertically, since gap_px > 0 separates them), so the
@@ -459,12 +463,7 @@ class VernierAcuityTest(PsychophysicalTest):
         slope = float(raw_estimate.extra["slope"])
         lapse = float(raw_estimate.extra["lapse_rate"])
         target_p = 0.75
-        reported_log_offset = _questplus_weibull_x_at_p(
-            raw_estimate.value, slope, GUESS_RATE, lapse, target_p
-        )
-        shift = reported_log_offset - raw_estimate.value
-        ci_low = raw_estimate.ci_low + shift
-        ci_high = raw_estimate.ci_high + shift
+        reported_log_offset, ci_low, ci_high = procedure.intensity_at_p_correct(target_p)
 
         offset_arcsec = 10.0**reported_log_offset
         ci_low_arcsec = 10.0**ci_low

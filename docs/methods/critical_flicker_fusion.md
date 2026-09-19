@@ -222,26 +222,61 @@ detection" above for why these need a larger trial count than the smoke-level
 recovery check.
 
 **Bias/coverage of this test's own `summarize()` conversion**
-(`@pytest.mark.slow` `test_summarize_bias_and_coverage_over_many_simulated_runs`):
-measured at N=50 simulated 50-trial runs against a
-`threshold=-1.0, slope=0.25, lapse=0.02` observer (all runs landed in the
+(`@pytest.mark.slow` `test_summarize_bias_and_coverage_over_many_simulated_runs`)
+-- **Phase 4 criterion-conversion pitfall fix and re-measurement.** An
+earlier version of `summarize()` built a
+`vpsych.core.psychometric.PsychometricFunction` directly from the raw
+QUEST+ estimate and converted it via
+`vpsych.core.psychometric.intensity_at_p_correct` -- silently the *wrong*
+formula for a `QuestPlusProcedure` fit (see
+`vpsych.core.procedures.questplus_procedure`'s "Criterion conversion
+pitfall" docstring section). That version, measured at N=50 simulated
+50-trial runs against a `threshold=-1.0, slope=0.25, lapse=0.02`
+(`vpsych.core.psychometric`-family) observer (all runs landed in the
 non-display-limited regime): mean bias **+0.22 log10(Hz) units** (SD 0.17),
-**80%** empirical coverage of the nominal 95% credible interval. This
-coverage is honestly below nominal -- reported plainly rather than tuned
-away, per `docs/WRITING_A_TEST.md`'s "report honestly" guidance for the
-qCSF/staircase sections. The likely cause: the reported CI is the raw
-QUEST+ credible interval shifted by a single additive offset (the
-difference between the F=0.5 threshold and the 75%-correct point), which is
-exact only to the extent the fitted slope/lapse posterior means themselves
-are well-estimated; at 50 trials on a threshold+slope+lapse joint posterior,
-they are not always precise, so the *shape* (not just location) of the true
-sampling distribution is under-represented by a pure shift of the raw
-interval. A slope-and-lapse-aware re-derivation of the CI (e.g. via
-bootstrap resampling in `x`-space, mirroring `WeightedStaircase`'s approach)
-would likely improve coverage and is a reasonable future improvement; the
-`@pytest.mark.slow` test itself uses a loose coverage floor (>= 0.5, N=40)
-so it still catches a gross regression without being a tight calibration
-gate on an already-documented limitation.
+**80%** empirical coverage of the nominal 95% credible interval.
+
+`summarize()` now uses the correct, shared
+`QuestPlusProcedure.intensity_at_p_correct`. Re-measuring with that same
+`vpsych.core.psychometric`-family ground truth turned out to be
+uninformative here: at `threshold=-1.0` the great majority of runs (43/50 in
+one re-measurement) now land in the *display-limited* regime and are
+excluded from the bias/coverage statistic entirely (a direct, mechanical
+consequence of the fix -- see below), leaving too few comparable runs for a
+meaningful before/after bias comparison at that specific true value.
+
+Re-measured properly instead with ground truth defined directly in
+`questplus`'s own native parameterization (matching
+`visual_acuity`/`vernier_acuity`'s validation approach, which avoids the
+family-mismatch confound entirely -- see
+`test_summarize_bias_and_coverage_over_many_simulated_runs`, now
+parametrized over 3 true values, N=30/value, 50 trials/run): mean bias
+**-0.24 to -0.36** log10(Hz)-equivalent `x`-units (`x = -log10(f)`) across
+`true_x` in `{-0.7, -0.6, -0.5}` (~5.0, ~4.0, ~3.2 Hz), with CI coverage
+0.73-0.87 -- closer to, but still somewhat below, nominal 95%. Two things
+explain both numbers honestly:
+
+- **Why the display-limited fraction increased**: `questplus`'s own native
+  anchor sits at the ~80%-of-range point for this test's `guess=0.5`
+  (`0.5 + (1 - 0.5 - lapse) * (1 - e^-1) ~= 0.80`), *above* the 75%
+  conventional criterion this test reports. Converting a fitted curve down
+  from ~80% to 75% moves the reported point *toward* the domain's
+  high-frequency ceiling (`x` decreases as `f` increases), so the fix
+  itself pushes borderline-central true values closer to the
+  `display_limited` edge-tolerance band -- a real, expected consequence of
+  reporting an honest, correctly-derived criterion rather than an artifact.
+- **Why coverage is still below nominal**: the reported CI is the raw
+  QUEST+ credible interval shifted by a single additive offset, exact only
+  to the extent the fitted slope/lapse posterior means are themselves
+  well-estimated; at 50 trials on a threshold+slope+lapse joint posterior
+  they are not always precise, so the *shape* (not just location) of the
+  true sampling distribution is under-represented by a pure shift of the
+  raw interval. A slope-and-lapse-aware re-derivation of the CI (e.g. via
+  bootstrap resampling in `x`-space, mirroring `WeightedStaircase`'s
+  approach) would likely improve coverage further and is a reasonable
+  future improvement; the `@pytest.mark.slow` test itself uses a loose
+  coverage floor (`>= 0.5`) so it still catches a gross regression without
+  being a tight calibration gate on an already-documented limitation.
 
 ## Citations
 

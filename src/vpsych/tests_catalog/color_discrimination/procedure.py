@@ -91,13 +91,38 @@ class TrivectorProcedure(MultiParamProcedure):
         self._n_trials = 0
         self._finished = False
         self._last_axis: int | None = None
+        self._axis_queue: list[int] = []
 
     @property
     def finished(self) -> bool:
         return self._finished
 
+    def _next_axis_idx(self) -> int:
+        """Draw the next axis via block randomization, not an unconstrained uniform draw.
+
+        A plain `rng.integers(3)` draw per trial (the original implementation)
+        gives each axis 1/3 of trials only *in expectation*: over a finite
+        session, binomial sampling variance means axes can end up with
+        substantially unequal trial counts purely by chance (e.g. 40/60/20%
+        of trials at typical session lengths), which starves whichever axis
+        drew short straw of QUEST+ trials and biases its threshold estimate
+        -- this was the dominant cause of this test's measured 0.13-0.18
+        log10 per-axis bias (see `docs/methods/color_discrimination.md`
+        "Validation"). Block randomization fixes this: axes are drawn from
+        a shuffled bag of exactly one copy of each axis, refilled with a
+        fresh shuffle whenever exhausted, so every consecutive block of 3
+        trials tests each axis exactly once (only the session's final,
+        possibly-partial block can be uneven, by at most 1 trial) -- while
+        still being locally unpredictable (a participant can't anticipate
+        which axis is up next from the raw trial sequence alone), matching
+        standard block-randomized interleaved-staircase practice.
+        """
+        if not self._axis_queue:
+            self._axis_queue = list(self.rng.permutation(len(AXES)))
+        return int(self._axis_queue.pop())
+
     def next_stimulus(self) -> dict[str, float]:
-        axis_idx = int(self.rng.integers(len(AXES)))
+        axis_idx = self._next_axis_idx()
         axis = AXES[axis_idx]
         intensity = self.axis_procedures[axis].next_intensity()
         self._last_axis = axis_idx
@@ -116,15 +141,23 @@ class TrivectorProcedure(MultiParamProcedure):
     def estimate(self) -> ThresholdEstimate:
         """Combined trivector estimate: geometric mean of the three axis thresholds.
 
-        Each axis's `QuestPlusProcedure.estimate().value` is already, by
-        this project's psychometric-function convention (every family
-        satisfies `F(0) == 0.5`, see `docs/METHODS.md`), the intensity at
-        `p_correct` exactly halfway between the guess rate and `1 -
-        lapse_rate` -- so no further conversion via
-        `vpsych.core.psychometric.intensity_at_p_correct` is needed to reach
-        that documented criterion; see this test's
-        `docs/methods/color_discrimination.md` for the derivation and how
-        it differs from the original CCT's 11-reversal staircase criterion.
+        Each axis's `QuestPlusProcedure.estimate().value` is `questplus`'s
+        own native Weibull threshold (the ~63.2%-of-range point in *its*
+        parameterization) -- **not** the `vpsych.core.psychometric`
+        `F(0)=0.5` point, contrary to what an earlier version of this
+        docstring claimed (see `QuestPlusProcedure`'s "Criterion conversion
+        pitfall" docstring section: that F(0)=0.5 convention belongs to
+        `vpsych.core.psychometric`'s own family, a genuinely different
+        functional form from `questplus`'s). This project's documented
+        criterion for this test (see `docs/methods/color_discrimination.md`)
+        is the FrACT-style midpoint -- `p_correct` exactly halfway between
+        the guess rate and `1 - lapse_rate`, equivalent to
+        `vpsych.core.psychometric`'s `F(0)=0.5` -- so each axis's threshold
+        is now explicitly converted to that criterion via
+        `QuestPlusProcedure.intensity_at_p_correct`, which inverts
+        `questplus`'s own fitted curve directly (not
+        `vpsych.core.psychometric.intensity_at_p_correct`, which would
+        assume the wrong family here too).
 
         The primary (combined) `value` is the *arithmetic* mean of the three
         axes' log10-displacement thresholds -- equivalently, the
@@ -139,7 +172,25 @@ class TrivectorProcedure(MultiParamProcedure):
                 "TrivectorProcedure.estimate() called before any trials were recorded"
             )
 
-        per_axis_estimate = {axis: self.axis_procedures[axis].estimate() for axis in AXES}
+        per_axis_estimate: dict[str, ThresholdEstimate] = {}
+        for axis in AXES:
+            proc = self.axis_procedures[axis]
+            raw = proc.estimate()
+            lapse = float(raw.extra["lapse_rate"])
+            target_p = proc.guess_rate + 0.5 * (1.0 - proc.guess_rate - lapse)
+            reported, ci_low_axis, ci_high_axis = proc.intensity_at_p_correct(target_p)
+            per_axis_estimate[axis] = raw.model_copy(
+                update={
+                    "value": reported,
+                    "ci_low": ci_low_axis,
+                    "ci_high": ci_high_axis,
+                    "extra": {
+                        **raw.extra,
+                        "raw_questplus_native_threshold_log10_uv_x1e4": raw.value,
+                        "target_p_correct": target_p,
+                    },
+                }
+            )
         mean_log10 = float(np.mean([e.value for e in per_axis_estimate.values()]))
         ci_low = float(np.mean([e.ci_low for e in per_axis_estimate.values()]))
         ci_high = float(np.mean([e.ci_high for e in per_axis_estimate.values()]))

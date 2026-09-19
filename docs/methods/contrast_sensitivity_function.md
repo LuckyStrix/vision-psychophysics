@@ -232,26 +232,29 @@ use no randomness; `csf_curve`'s own randomness is a fixed local seed, not
   correlation (documented above); it is a visualization aid, not a
   substitute for the exact AULCSF CI.
 
-## Shared-code notes (reported, not fixed here)
+## Shared-code notes (Phase 4: all three resolved)
 
-- `vpsych.core.calibration.gamma` has no built-in constructor from a
-  *stored* `GammaCalibration` straight to a `GammaChannelModel`; this test
-  (and `letter_contrast_sensitivity`) build one locally
+- `vpsych.core.calibration.gamma` originally had no built-in constructor
+  from a *stored* `GammaCalibration` straight to a `GammaChannelModel`;
+  this test (and `letter_contrast_sensitivity`) built one locally
   (`vpsych.tests_catalog._contrast_rendering.gamma_channel_model_from_calibration`).
-  A third gamma-dependent test would likely benefit from this being
-  promoted into `core/calibration/gamma.py`.
-- `vpsych.core.trial_loop.PsychoPyBackend` does not currently set a window
-  gamma ramp at all. `docs/WRITING_A_TEST.md` describes this as happening
-  at window-creation time, not inside a test, but that hook does not exist
-  yet; this test does its own full linearization in Python instead (see
-  `_contrast_rendering`'s module docstring).
-- `PsychophysicalTest.make_catch_trial_intensity` is declared `-> float` in
-  `tests_catalog/base.py`, but `vpsych.core.trial_loop.TrialLoop` already
-  types the value it assigns from that call as `float | dict[str, float]`
-  specifically to support a `MultiParamProcedure`-driven test like this
-  one. This test overrides the method to return `dict[str, float]` (with a
-  `# type: ignore[override]` and an explanatory comment), which works at
-  runtime but is a real, minor gap in the frozen abstract signature.
+  **Resolved**: that constructor is now promoted into
+  `vpsych.core.calibration.gamma.gamma_channel_model_from_calibration`
+  (`_contrast_rendering` re-exports it for backward compatibility), and
+  `vernier_acuity` uses it too (see next point).
+- `vpsych.core.trial_loop.PsychoPyBackend` does not set a window gamma
+  ramp. **Resolved explicitly, not left as a gap**: this is now the
+  documented, permanent design (see `docs/WRITING_A_TEST.md` section 7's
+  "Phase 4 gamma-ramp decision") -- every gamma-dependent test
+  self-linearizes in Python instead, including `vernier_acuity`, which
+  previously (incorrectly) assumed a window ramp it never actually got;
+  see that test's module docstring for the fix.
+- `PsychophysicalTest.make_catch_trial_intensity` was declared `-> float`
+  in `tests_catalog/base.py`, though `vpsych.core.trial_loop.TrialLoop`
+  already typed the value it assigns from that call as
+  `float | dict[str, float]`. **Resolved**: the abstract signature is now
+  `-> float | dict[str, float]`, and this test's override no longer needs
+  its `# type: ignore[override]`.
 
 ## Citations
 
