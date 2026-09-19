@@ -31,7 +31,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
-from vpsych.core.psychometric import PsychometricFunction, intensity_at_p_correct
 from vpsych.core.timing import summarize_frame_intervals
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import TestSummary
@@ -381,10 +380,16 @@ class MotionCoherenceTest(PsychophysicalTest):
     def summarize(self, trials: pd.DataFrame) -> TestSummary:
         """Recompute the threshold deterministically from the raw trials (see WRITING_A_TEST.md).
 
-        The QUEST+ posterior threshold is the F=0.5 crossing of the Weibull
-        (see `docs/METHODS.md`'s "Psychometric function families" section);
-        this converts that to the intensity at 75% correct (2AFC) via
-        `intensity_at_p_correct`, and reports it as coherence *percent*
+        `QuestPlusProcedure.estimate().value` is `questplus`'s own native
+        Weibull threshold (the ~63.2%-of-range point in *its*
+        parameterization, not the `vpsych.core.psychometric` `F(0)=0.5`
+        point -- see `QuestPlusProcedure`'s "Criterion conversion pitfall"
+        docstring section). This converts that to the intensity at 75%
+        correct (2AFC) via `QuestPlusProcedure.intensity_at_p_correct`,
+        which inverts `questplus`'s own formula directly -- *not*
+        `vpsych.core.psychometric.intensity_at_p_correct`, which assumes
+        the other, incompatible parameterization and would silently give
+        the wrong criterion here -- and reports it as coherence *percent*
         (`10**x * 100`) rather than log10 coherence, per the task
         requirement.
         """
@@ -399,18 +404,7 @@ class MotionCoherenceTest(PsychophysicalTest):
 
         slope = float(raw_estimate.extra["slope"])
         lapse = float(raw_estimate.extra["lapse_rate"])
-        fn = PsychometricFunction(
-            family="weibull",
-            threshold=raw_estimate.value,
-            slope=slope,
-            guess=GUESS_RATE,
-            lapse=lapse,
-            intensity_scale="log10",
-        )
-        target_log10 = intensity_at_p_correct(fn, 0.75)
-        offset = target_log10 - raw_estimate.value
-        ci_low_log10 = raw_estimate.ci_low + offset
-        ci_high_log10 = raw_estimate.ci_high + offset
+        target_log10, ci_low_log10, ci_high_log10 = procedure.intensity_at_p_correct(0.75)
 
         def _to_percent(log10_coherence: float) -> float:
             return float(10.0**log10_coherence * 100.0)
@@ -448,7 +442,7 @@ class MotionCoherenceTest(PsychophysicalTest):
             method="quest_plus_posterior_mean_at_75pct_correct",
             extra={
                 **raw_estimate.extra,
-                "threshold_f0.5_log10_coherence": raw_estimate.value,
+                "raw_questplus_native_threshold_log10_coherence": raw_estimate.value,
                 "target_p_correct": 0.75,
             },
         )

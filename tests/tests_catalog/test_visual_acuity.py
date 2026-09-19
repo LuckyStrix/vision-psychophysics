@@ -20,6 +20,7 @@ from vpsych.core.calibration.models import (
     PrimaryChromaticity,
 )
 from vpsych.core.display import DisplayGeometry
+from vpsych.core.procedures.questplus_procedure import questplus_weibull_x_at_p
 from vpsych.core.psychometric import intensity_at_p_correct
 from vpsych.runner.__main__ import build_arg_parser, parse_simulated_observer_spec, run_session
 from vpsych.runner.status import RunnerExitCode
@@ -28,7 +29,6 @@ from vpsych.tests_catalog.base import check_requirements
 from vpsych.tests_catalog.visual_acuity import (
     VisualAcuityParams,
     VisualAcuityTest,
-    _questplus_weibull_x_at_p,
 )
 from vpsych.tests_catalog.visual_acuity.optotype import (
     gap_half_angle_deg,
@@ -455,7 +455,7 @@ def test_recovery_slow_bias_and_coverage(true_threshold: float) -> None:
         reported, ci_low, ci_high, _ = test._fract_criterion_threshold(
             est.value, est.ci_low, est.ci_high, est.extra["slope"], est.extra["lapse_rate"]
         )
-        true_at_criterion = _questplus_weibull_x_at_p(
+        true_at_criterion = questplus_weibull_x_at_p(
             true_threshold, slope_true, guess, lapse_true, target_p
         )
         biases.append(reported - true_at_criterion)

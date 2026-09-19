@@ -20,6 +20,7 @@ from vpsych.core.calibration.models import (
     PrimaryChromaticity,
 )
 from vpsych.core.display import DisplayGeometry
+from vpsych.core.procedures.questplus_procedure import questplus_weibull_x_at_p
 from vpsych.core.psychometric import intensity_at_p_correct
 from vpsych.runner.__main__ import build_arg_parser, parse_simulated_observer_spec, run_session
 from vpsych.runner.status import RunnerExitCode
@@ -28,7 +29,6 @@ from vpsych.tests_catalog.base import check_requirements
 from vpsych.tests_catalog.vernier_acuity import (
     VernierAcuityParams,
     VernierAcuityTest,
-    _questplus_weibull_x_at_p,
 )
 from vpsych.tests_catalog.vernier_acuity.texture import (
     line_column_coverage,
@@ -438,13 +438,13 @@ def test_recovery_slow_bias_and_coverage(true_log_offset: float) -> None:
             correct = bool(rng.random() < p_correct(x))
             proc.update(x, correct)
         est = proc.estimate()
-        reported = _questplus_weibull_x_at_p(
+        reported = questplus_weibull_x_at_p(
             est.value, est.extra["slope"], guess, est.extra["lapse_rate"], 0.75
         )
         shift = reported - est.value
         ci_low = est.ci_low + shift
         ci_high = est.ci_high + shift
-        true_at_75 = _questplus_weibull_x_at_p(true_log_offset, slope_true, guess, lapse_true, 0.75)
+        true_at_75 = questplus_weibull_x_at_p(true_log_offset, slope_true, guess, lapse_true, 0.75)
         biases.append(reported - true_at_75)
         if ci_low <= true_at_75 <= ci_high:
             covered += 1
