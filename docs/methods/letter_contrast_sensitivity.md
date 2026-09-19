@@ -14,11 +14,13 @@ administer routinely.
 letter is shown, the participant types the corresponding key, and log
 contrast sensitivity is estimated from a QUEST+ run
 (`vpsych.core.procedures.questplus_procedure.QuestPlusProcedure`, Watson
-2017) on **log10 Weber contrast**, using a fixed-slope-family (`weibull`,
-i.e. the `F(0)=0.5` Weibull-family sigmoid documented in
-`docs/METHODS.md`'s "Adaptive procedures" section) psychometric function
-with guess rate 0.1 (1/10, matching the 10 letter alternatives) and a small
-free lapse-rate grid (`[0.0, 0.02, 0.04]`).
+2017) on **log10 Weber contrast**, fitting `questplus`'s own native
+`"weibull"` psychometric function (Watson & Pelli 1983's original QUEST
+parameterization -- see `QuestPlusProcedure`'s "Criterion conversion
+pitfall" docstring section for exactly how this differs from
+`vpsych.core.psychometric`'s own, differently-parameterized `weibull`
+family) with guess rate 0.1 (1/10, matching the 10 letter alternatives) and
+a small free lapse-rate grid (`[0.0, 0.02, 0.04]`).
 
 **This is not the Pelli-Robson chart itself** -- see "Difference from the
 Pelli-Robson chart" below.
@@ -131,21 +133,35 @@ Catch trials use a high (0.9 by default, `catch_contrast`) Weber contrast
 contrast)`, with a CI (`TestSummary.estimate.units ==
 "log10_contrast_sensitivity"`).
 
-**Threshold criterion** (explicitly stated per the task requirement):
-`QuestPlusProcedure.estimate()` reports the fitted Weibull-family
-psychometric function's **`F(0) = 0.5` crossing** (see `docs/METHODS.md`'s
-psychometric-function convention) in log10 Weber contrast -- *not* the
-75%-correct point conventionally used for this suite's 2AFC tests. With
-guess rate 0.1 and a small lapse rate, `F(0) = 0.5` corresponds to roughly
-**55% correct** (`guess + 0.5 * (1 - guess - lapse)`), not 75%. Log CS is
-then `-1 *` that log10 Weber contrast threshold, with the CI transformed
-the same way (`ci_low`/`ci_high` swap under negation:
-`log_cs_ci_low = -contrast_ci_high`, `log_cs_ci_high = -contrast_ci_low`).
+**Threshold criterion** (explicitly stated per the task requirement, and
+corrected as part of the Phase 4 fix list's item 1 -- see
+`vpsych.core.procedures.questplus_procedure`'s "Criterion conversion
+pitfall" docstring section): `QuestPlusProcedure.estimate().value` is
+`questplus`'s own *native* Weibull threshold -- the ~63.2%-of-range point in
+*its* parameterization, which is **not** the same as
+`vpsych.core.psychometric`'s own `F(0) = 0.5` convention, contrary to what
+an earlier version of this section claimed. This test's documented
+criterion is instead the FrACT-style midpoint,
+`p_correct = guess + 0.5 * (1 - guess - lapse)` -- equivalent to
+`vpsych.core.psychometric`'s `F(0) = 0.5` point -- roughly **55% correct**
+with `guess=0.1` and a small lapse rate; `summarize()` now reaches it by
+explicitly inverting `questplus`'s own fitted curve via
+`QuestPlusProcedure.intensity_at_p_correct`, rather than (as an earlier,
+buggy version did) assuming the raw native threshold was already there
+(which is actually closer to **67%** correct for this guess rate -- a
+real, if modest, numeric difference this bug introduced into every
+previously-reported threshold). Either way, this criterion is *not* the
+75%-correct point conventionally used for this suite's 2AFC tests. Log CS
+is then `-1 *` the (correctly criterion-converted) log10 Weber contrast
+threshold, with the CI transformed the same way (`ci_low`/`ci_high` swap
+under negation: `log_cs_ci_low = -contrast_ci_high`,
+`log_cs_ci_high = -contrast_ci_low`).
 `TestSummary.estimate.extra["threshold_criterion"]` states this in plain
-text alongside every summary, and
-`extra["threshold_log10_weber_contrast"]` carries the raw (pre-negation)
-contrast-domain threshold for anyone who wants to re-derive a different
-criterion from the logged trials.
+text alongside every summary; `extra["threshold_log10_weber_contrast"]`
+carries the criterion-converted (pre-negation) contrast-domain threshold,
+and `extra["raw_questplus_native_threshold_log10_weber_contrast"]` the raw,
+unconverted native threshold, for anyone who wants to re-derive a
+different criterion from the logged trials.
 
 ## Difference from the Pelli-Robson chart
 
