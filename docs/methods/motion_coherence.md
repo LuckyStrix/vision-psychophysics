@@ -140,9 +140,9 @@ against a spacing of 0.71 deg -- comfortably (8.5x) under the limit.
 `output_units = "coherence_percent"`. `TestSummary.estimate.value` is the
 coherence percentage (0-100) at which the fitted psychometric function
 predicts 75% correct (2AFC), with a 95% credible interval in the same units.
-`TestSummary.estimate.extra` also carries the raw QUEST+ F=0.5-crossing
-threshold (`"threshold_f0.5_log10_coherence"`) and fitted slope/lapse rate
-for transparency.
+`TestSummary.estimate.extra` also carries the raw, native-parameterization
+QUEST+ threshold (`"raw_questplus_native_threshold_log10_coherence"`) and
+fitted slope/lapse rate for transparency.
 
 ## Validation
 
@@ -154,17 +154,49 @@ bias/coverage validation for QUEST+ itself lives in
 `tests/procedures/test_questplus_procedure.py`, not duplicated per-test per
 `docs/WRITING_A_TEST.md`).
 
-**Bias/coverage of this test's own `summarize()` conversion** (F=0.5 ->
-75%-correct, log10 -> percent; `@pytest.mark.slow`
-`test_summarize_bias_and_coverage_over_many_simulated_runs`): measured at
-N=100 simulated 50-trial runs against a
-`threshold=-1.0, slope=0.3, lapse=0.02` observer: mean bias **+0.10
-log10-coherence units** (SD 0.23), **99%** empirical coverage of the nominal
-95% credible interval. The positive bias (estimated threshold reported
-somewhat higher/easier than truth) is a small-sample effect of the
-grid-discretized QUEST+ posterior combined with the 75%-point conversion,
-not a sign error; it is well within the loose smoke-level tolerance the
-slow test itself checks (N=50 there, for runtime).
+**Bias/coverage of this test's own `summarize()` conversion** (`@pytest.mark.slow`
+`test_summarize_bias_and_coverage_over_many_simulated_runs`) -- **Phase 4
+criterion-conversion pitfall fix and re-measurement.** An earlier version of
+`summarize()` built a `vpsych.core.psychometric.PsychometricFunction`
+directly from the raw QUEST+ estimate and converted it via
+`vpsych.core.psychometric.intensity_at_p_correct` -- silently the *wrong*
+formula for a `QuestPlusProcedure` fit (see
+`vpsych.core.procedures.questplus_procedure`'s "Criterion conversion
+pitfall" docstring section). That version, measured at N=100 simulated
+50-trial runs against a `threshold=-1.0, slope=0.3, lapse=0.02`
+(`vpsych.core.psychometric`-family) observer: mean bias **+0.10
+log10-coherence units** (SD 0.23), 99% empirical coverage of the nominal
+95% credible interval.
+
+`summarize()` now uses the correct, shared
+`QuestPlusProcedure.intensity_at_p_correct`, which inverts `questplus`'s own
+fitted curve directly. Re-measured the **same way** (same
+`vpsych.core.psychometric`-family observer, N=100, 50 trials): mean bias
+**-0.155 log10-coherence units** (SD 0.23), **94%** coverage -- coverage is
+now close to nominal (was overconservative at 99%), but the point-estimate
+bias did not shrink, because this validation methodology has a second,
+independent confound: it generates data from `vpsych.core.psychometric`'s
+own sigmoid family while `QuestPlusProcedure` fits `questplus`'s different
+native family, so *even a perfectly correct conversion* inherits some
+family-shape mismatch.
+
+Re-measured a **third** way, isolating just the criterion-conversion fix
+from that confound -- ground truth defined directly in `questplus`'s own
+native parameterization (matching `visual_acuity`/`vernier_acuity`'s
+validation approach; see `test_summarize_bias_and_coverage_over_many_simulated_runs`,
+now parametrized over 3 true thresholds, N=40/value, 50 trials/run): mean
+bias ranges from about **+0.42** log10-coherence units at
+`true_log10=-1.5` (near the domain's low-coherence edge -- an edge effect,
+not a criterion bug) down to about **-0.11** at `true_log10=-0.5`, with CI
+coverage 0.93-0.98 (close to nominal). This is the honest picture: the
+criterion-conversion bug (item 1) is real and now fixed, coverage is now
+close to nominal, and the remaining point-estimate bias at this test's
+default 50-trial budget and shallow (`slope~0.3`) default slope grid is a
+genuine statistical/design property (extrapolating from `questplus`'s own
+~80%-of-range native anchor, at `guess=0.5`, out to the 75% conventional
+criterion amplifies slope-estimation noise), not a parameterization bug --
+a larger trial budget or a steeper default slope prior would shrink it
+further, but that is a design tuning question, not part of this fix.
 
 ## Citations
 
