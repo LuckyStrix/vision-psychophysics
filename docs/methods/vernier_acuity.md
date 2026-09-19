@@ -26,12 +26,17 @@ Lapse rate is a free parameter on the grid `[0.0, 0.02, 0.04]`.
 **Number of alternatives**: 2AFC -- left or right arrow key.
 
 **Threshold criterion**: the offset at 75% correct, inverted against
-`questplus`'s own Weibull formula (`_questplus_weibull_x_at_p`, identical
-derivation to `visual_acuity`'s own helper of the same name -- duplicated
-locally rather than shared, since it is test-specific, not core/shared,
-code). The credible interval is shifted by the same constant offset as the
-point estimate, holding slope/lapse fixed (the same approximation used
-throughout this project's adaptive procedures; see `docs/METHODS.md`).
+`questplus`'s own Weibull formula via the shared, tested
+`QuestPlusProcedure.intensity_at_p_correct`
+(`vpsych.core.procedures.questplus_procedure.questplus_weibull_x_at_p`) --
+see `docs/METHODS.md`'s "Criterion conversion pitfall" section for why
+this must invert `questplus`'s own formula directly and not
+`vpsych.core.psychometric.intensity_at_p_correct`. `visual_acuity` shares
+this same implementation (previously each test duplicated a private local
+copy; both now use the one promoted into `core/`). The credible interval
+is shifted by the same constant offset as the point estimate, holding
+slope/lapse fixed (the same approximation used throughout this project's
+adaptive procedures; see `docs/METHODS.md`).
 
 ## Stimulus
 
@@ -80,23 +85,28 @@ sub-pixel position to well under 0.02 px (in practice, to floating-point
 precision) across a range of test positions spanning whole- and
 fractional-pixel offsets (see `test_vernier_acuity.py`).
 
-**Gamma linearization**: each texture pixel's value is the coverage-
-weighted **linear** luminance mixture of the background and foreground
-(line) levels -- the luminance a photoreceptor pooling light linearly over
-that pixel's area would actually integrate (the same principle behind this
-project's grade-B psychophysical gamma calibration; see
-`docs/CALIBRATION.md`'s half-luminance bisection method). Per
-`docs/WRITING_A_TEST.md` section 7, turning that *linear* value into the
-correct nonlinear hardware drive level is the window's own gamma ramp's
-job (built once, from the session's real calibration, at window-creation
-time, not per-trial by this test) -- which is why this test requires a
-real gamma calibration (grade B minimum) rather than performing its own
-per-pixel inverse-gamma lookup. Without an active, correctly-built gamma
-ramp, the luminance mixture this test computes would be displayed through
-the panel's native, uncorrected response curve and would no longer be the
-physically-correct linear mixture the sub-pixel encoding relies on. This
-general approach -- antialiasing quality (not just raw pixel pitch) setting
-the achievable Vernier threshold on a fixed-resolution display -- is
+**Gamma linearization**: each texture pixel's coverage-weighted **linear**
+luminance mixture of the background and foreground (line) levels -- the
+luminance a photoreceptor pooling light linearly over that pixel's area
+would actually integrate (the same principle behind this project's grade-B
+psychophysical gamma calibration; see `docs/CALIBRATION.md`'s
+half-luminance bisection method) -- is computed first, then this test
+itself converts that to the correct gamma-corrected hardware drive level,
+via `render_vertical_line_texture`'s `gamma_model` argument
+(`vpsych.core.calibration.gamma.linearize`, using a
+`GammaChannelModel` built from the session's real calibration via
+`gamma_channel_model_from_calibration`). This is the same self-linearizing
+pattern `contrast_sensitivity_function`/`letter_contrast_sensitivity`/
+`color_discrimination` use, **not** a window-level gamma ramp -- see
+`docs/WRITING_A_TEST.md` section 7's "Phase 4 gamma-ramp decision" for why:
+`PsychoPyBackend` intentionally never sets one, so an earlier version of
+this test (which assumed a ramp would linearize its raw linear-luminance
+texture) was silently wrong, while the other three tests (which already
+self-linearized, expecting no ramp) were accidentally right. This is why
+this test still requires a real gamma calibration (grade B minimum) -- the
+calibration is used here, in Python, rather than via a ramp. This general
+approach -- antialiasing quality (not just raw pixel pitch) setting the
+achievable Vernier threshold on a fixed-resolution display -- is
 consistent with empirical findings in Lloyd, C., Winterbottom, M., Gaska,
 J., & Williams, L. (2015). Effects of display pixel pitch and antialiasing
 on threshold vernier acuity. *Proceedings of the IMAGE Society Annual
