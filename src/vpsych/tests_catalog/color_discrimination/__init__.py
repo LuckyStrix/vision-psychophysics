@@ -53,20 +53,25 @@ composed into one `vpsych.core.procedures.base.MultiParamProcedure` by
 (this test's own small composite procedure -- neither a single
 `AdaptiveProcedure` nor the existing `QCSF` supports interleaving three
 independent procedures, so this package implements it directly rather than
-touching `vpsych.core.procedures`). The axis to test is chosen uniformly at
-random each trial, via `trial_ctx["rng"]` (logged in `stimulus_params["axis"]`
+touching `vpsych.core.procedures`). The axis to test is chosen via block
+randomization each trial (see `TrivectorProcedure._next_axis_idx`,
+guaranteeing near-exactly equal per-axis trial counts, not just equal in
+expectation), via `trial_ctx["rng"]` (logged in `stimulus_params["axis"]`
 every trial).
 
 **4AFC / criterion**: gap orientation is a 4-alternative forced choice (up/
-down/left/right arrow keys), guess rate 0.25. Because every psychometric
-family this project uses satisfies `F(0) == 0.5` by construction (see
-`docs/METHODS.md`'s "Psychometric function families" section), each axis's
-raw QUEST+ `threshold` parameter is *already* the intensity at `p_correct`
-exactly halfway between the guess rate and `1 - lapse_rate` -- the
-documented criterion this test reports (see
-`TrivectorProcedure.estimate`'s docstring for the one-line proof), with no
-further `intensity_at_p_correct` conversion needed. This differs from CCT's
-own per-axis criterion, an 11-reversal 1-up/1-down transformed staircase
+down/left/right arrow keys), guess rate 0.25. `QuestPlusProcedure.estimate()
+.value` is `questplus`'s own native Weibull threshold, **not**
+`vpsych.core.psychometric`'s `F(0) == 0.5` point (a genuinely different
+functional form -- see `vpsych.core.procedures.questplus_procedure`'s
+"Criterion conversion pitfall" docstring section, and
+`docs/METHODS.md`'s section of the same name). This test's documented
+criterion -- `p_correct` exactly halfway between the guess rate and
+`1 - lapse_rate`, equivalent to `vpsych.core.psychometric`'s own
+`F(0) = 0.5` convention -- is reached by explicitly converting via
+`QuestPlusProcedure.intensity_at_p_correct` (see
+`TrivectorProcedure.estimate`'s docstring). This differs from CCT's own
+per-axis criterion, an 11-reversal 1-up/1-down transformed staircase
 (Levitt 1971) targeting the 50%-of-range reversal mean, not a fitted
 psychometric-function criterion; `docs/methods/color_discrimination.md`
 documents this difference explicitly.

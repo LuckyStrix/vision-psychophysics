@@ -37,16 +37,21 @@ composed by this package's own `TrivectorProcedure`
 (`vpsych.tests_catalog.color_discrimination.procedure`), a small
 `vpsych.core.procedures.base.MultiParamProcedure` implemented entirely
 inside this test package (see "Implementation notes" below for why this was
-necessary). Each trial, the axis to test is drawn uniformly at random; the
-QUEST+ procedure for that axis alone selects the next intensity and is
-updated with the outcome. Each axis's psychometric function is the
-project-standard fixed-guess-rate Weibull-family function (see
-`docs/METHODS.md`'s "Psychometric function families" section):
+necessary). Each trial, the axis to test is drawn via **block
+randomization** (a shuffled bag of one copy of each axis, refilled whenever
+exhausted -- see "Interleaving and threshold criterion" below for why this
+replaced an earlier uniform-random draw); the QUEST+ procedure for that
+axis alone selects the next intensity and is updated with the outcome.
+Each axis's psychometric function is `questplus`'s own native Weibull
+(fitted internally by `QuestPlusProcedure` -- **not**
+`vpsych.core.psychometric`'s own, differently-parameterized `weibull`
+family; see "Interleaving and threshold criterion" below and
+`vpsych.core.procedures.questplus_procedure`'s "Criterion conversion
+pitfall" docstring section for the distinction and why it matters):
 
 ```
-p(x) = guess + (1 - guess - lapse) * F((x - threshold) / slope)
+p(x) = 1 - lapse - (1 - guess - lapse) * exp(-10**(slope * (x - threshold)))
 guess = 0.25   (4AFC)
-F(z) = 1 - 2**(-2**z)     (Weibull-family sigmoid, F(0) = 0.5 by construction)
 x = log10(displacement), displacement in u'v' x 1e-4 units
 ```
 
