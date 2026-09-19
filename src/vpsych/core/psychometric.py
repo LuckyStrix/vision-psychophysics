@@ -565,6 +565,91 @@ def bootstrap_ci(
     )
 
 
+def bootstrap_ci_at_p_correct(
+    fit: FitResult,
+    p_target: float,
+    n_boot: int = 1000,
+    level: float = 0.95,
+    rng: np.random.Generator | None = None,
+) -> BootstrapCIResult:
+    """Full-refit parametric bootstrap CI for the intensity at a target %-correct.
+
+    Unlike `bootstrap_ci(fit, parameter="threshold")` followed by converting
+    just the resulting threshold interval via `intensity_at_p_correct` (a
+    documented simplification `ConstantStimuli`/`WeightedStaircase`'s
+    `estimate()` both historically used, which holds `slope`/`lapse` fixed
+    at their *original* point estimates and so only propagates uncertainty
+    in `threshold`), this refits **all three** parameters
+    (`threshold`/`slope`/`lapse`) on every resample -- exactly like
+    `bootstrap_ci` already does internally (see `_refit_single`) -- and
+    evaluates `intensity_at_p_correct` using *that resample's own* fitted
+    function, not the original one. This propagates slope/lapse
+    resample-to-resample uncertainty into the interval too, which matters
+    most for a design (like a staircase) whose trials concentrate narrowly
+    around threshold, leaving slope poorly identified: holding slope fixed
+    at a single point estimate then understates how uncertain the
+    target-percent intensity really is.
+
+    Args:
+        fit: The original fit to bootstrap around (must carry
+            `design_intensities`/`design_n_total`, i.e. returned by
+            `fit_mle`).
+        p_target: Target probability correct to evaluate
+            `intensity_at_p_correct` at on every resample, e.g. the
+            staircase's own `target_p_correct`.
+        n_boot: Number of bootstrap resamples.
+        level: Nominal coverage of the interval, e.g. `0.95`.
+        rng: Random generator used to draw resamples. If `None`, an
+            implementation may create its own (unseeded) generator, which
+            will *not* be reproducible -- callers requiring reproducibility
+            must pass one.
+
+    Returns:
+        A `BootstrapCIResult` with `parameter="intensity_at_p_correct"` and
+        `point_estimate` the original fit's own
+        `intensity_at_p_correct(fit.function, p_target)`.
+
+    Raises:
+        ValueError: If `fit` carries no design data to resample from.
+    """
+    x = np.asarray(fit.design_intensities, dtype=float)
+    n = np.asarray(fit.design_n_total, dtype=float)
+    if len(x) == 0:
+        raise ValueError(
+            "fit has no stored design_intensities/design_n_total to resample from "
+            "(was it constructed by fit_mle?)"
+        )
+    if rng is None:
+        rng = np.random.default_rng()
+
+    fn = fit.function
+    p_hat = np.clip(np.array([fn.p_correct(float(xi)) for xi in x]), 0.0, 1.0)
+    fix_lapse = fn.lapse if fit.fixed_lapse else None
+    x0 = (fn.threshold, fn.slope, fn.lapse)
+    n_int = n.astype(int)
+
+    values = np.empty(n_boot, dtype=float)
+    for b in range(n_boot):
+        k_b = rng.binomial(n_int, p_hat).astype(float)
+        threshold_b, slope_b, lapse_b = _refit_single(x, k_b, n, fn.family, fn.guess, fix_lapse, x0)
+        resampled_fn = fn.model_copy(
+            update={"threshold": threshold_b, "slope": slope_b, "lapse": lapse_b}
+        )
+        values[b] = intensity_at_p_correct(resampled_fn, p_target)
+
+    alpha = 1.0 - level
+    ci_low, ci_high = np.percentile(values, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    point_estimate = intensity_at_p_correct(fn, p_target)
+    return BootstrapCIResult(
+        parameter="intensity_at_p_correct",
+        point_estimate=point_estimate,
+        ci_low=float(min(ci_low, ci_high)),
+        ci_high=float(max(ci_low, ci_high)),
+        ci_level=level,
+        n_boot=n_boot,
+    )
+
+
 def _deviance(k: np.ndarray, n: np.ndarray, p_hat: np.ndarray) -> float:
     """Deviance of fitted probabilities `p_hat` against binomial data `(k, n)`.
 

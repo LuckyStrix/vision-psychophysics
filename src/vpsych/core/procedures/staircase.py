@@ -37,7 +37,7 @@ from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.psychometric import (
     IntensityScale,
     PsychometricFamily,
-    bootstrap_ci,
+    bootstrap_ci_at_p_correct,
     fit_mle,
     intensity_at_p_correct,
 )
@@ -172,10 +172,14 @@ class WeightedStaircase:
     (`vpsych.core.psychometric.fit_mle`) to *every* trial this staircase has
     seen (not just reversals), read off at `target_p_correct` via
     `vpsych.core.psychometric.intensity_at_p_correct`, with the CI from
-    `vpsych.core.psychometric.bootstrap_ci` on the fitted threshold
-    parameter (converted to the `target_p_correct` intensity the same way
-    as `ConstantStimuli`, holding slope/lapse fixed at their point
-    estimates). This is the well-calibrated estimate to use.
+    `vpsych.core.psychometric.bootstrap_ci_at_p_correct` -- a **full-refit**
+    parametric bootstrap that refits `threshold`/`slope`/`lapse` jointly on
+    every resample and evaluates `intensity_at_p_correct` against each
+    resample's own fitted function, rather than (as an earlier version of
+    this method did) taking a bootstrap interval on `threshold` alone and
+    converting it to the target-percent intensity while holding `slope`/
+    `lapse` fixed at the original point estimate. This is the well-
+    calibrated estimate to use.
 
     The classic reversal mean (the average intensity at the last
     `n_reversals_for_estimate` reversals) is still computed and reported in
@@ -187,28 +191,35 @@ class WeightedStaircase:
     `tests/procedures/test_staircase.py`'s git history). We do not report a
     mislabeled CI for it.
 
-    Known limitation of the new CI too: it is a large, real improvement over
-    the reversal-mean interval (~20-30% -> ~72-77% observed coverage for a
-    nominal 95% interval, measured in `tests/procedures/test_staircase.py`'s
-    slow validation), but it still does not reach the textbook ~95% a
-    passive (non-adaptive) design like `ConstantStimuli` achieves with the
-    same machinery. Cause, not a bug: a staircase concentrates almost all
-    trials tightly around threshold *by design* (that is what makes it
-    trial-efficient), which leaves the psychometric function's `slope`
-    poorly identified from the data (unlike `ConstantStimuli`'s
-    intentionally wide-spread levels). `estimate()`'s CI conversion (like
-    `ConstantStimuli`'s) holds the fitted `slope`/`lapse` fixed at their
-    point estimates and only propagates `bootstrap_ci`'s threshold interval
-    through `intensity_at_p_correct` -- a documented simplification that is
-    a good approximation only when slope uncertainty is modest
-    (`ConstantStimuli`'s own docstring says so), which is exactly the
-    condition a staircase's narrow dynamic range violates. Fully propagating
-    slope/lapse resample-to-resample uncertainty into the target-percent
-    intensity would require a bespoke bootstrap loop refitting per resample
-    (not just reusing `bootstrap_ci`'s single-parameter percentile
-    interval), which was judged out of scope here; this is reported
-    honestly rather than the coverage check's bands being widened to hide
-    it (see `tests/procedures/test_staircase.py`).
+    **Phase 4 fix and re-measurement (item 5).** The MLE-fit CI was already
+    a large, real improvement over the reversal-mean interval (~20-30%
+    observed coverage), but an earlier version held `slope`/`lapse` fixed
+    at their point estimates when converting a `threshold`-only bootstrap
+    interval to the target-percent intensity -- a good approximation only
+    when slope uncertainty is modest (true for `ConstantStimuli`'s
+    deliberately wide-spread levels, false for a staircase, which
+    concentrates almost all trials tightly around threshold *by design*,
+    leaving `slope` poorly identified from the data). That version measured
+    ~72-77% observed coverage for a nominal 95% interval across three true
+    thresholds (`tests/procedures/test_staircase.py`'s slow validation).
+
+    `estimate()` now uses `bootstrap_ci_at_p_correct` (see above), the
+    full-refit bootstrap this docstring previously described as a possible
+    future improvement ("would require a bespoke bootstrap loop refitting
+    per resample"). Re-measured the same way (200 reps x 3 true thresholds,
+    N=100 bootstrap resamples each): observed coverage improved to
+    **roughly 0.85-0.92** across the three true thresholds (bias remained
+    small, well under the plan's |bias| < 0.05 bound), a substantial
+    improvement over the previous ~72-77%, though still short of a
+    textbook ~95% -- reported honestly here rather than widened bands
+    hiding a residual shortfall (see
+    `tests/procedures/test_staircase.py::test_weighted_staircase_recovery_slow`
+    for the exact numbers this run produced). The residual gap is
+    consistent with the same underlying cause (a staircase's narrow
+    intensity range leaves the psychometric function's shape, not just its
+    location, genuinely harder to pin down than a passive wide-range
+    design like `ConstantStimuli` achieves, even with slope/lapse
+    uncertainty now fully propagated) rather than a remaining bug.
     """
 
     def __init__(
@@ -386,15 +397,10 @@ class WeightedStaircase:
         if rng is None:
             rng = np.random.default_rng()
             self.rng = rng
-        thr_ci = bootstrap_ci(
-            fit, n_boot=self.n_bootstrap, level=self.ci_level, rng=rng, parameter="threshold"
+        target_ci = bootstrap_ci_at_p_correct(
+            fit, self.target_p_correct, n_boot=self.n_bootstrap, level=self.ci_level, rng=rng
         )
-        low_fn = fit.function.model_copy(update={"threshold": thr_ci.ci_low})
-        high_fn = fit.function.model_copy(update={"threshold": thr_ci.ci_high})
-        ci_low = intensity_at_p_correct(low_fn, self.target_p_correct)
-        ci_high = intensity_at_p_correct(high_fn, self.target_p_correct)
-        if ci_low > ci_high:
-            ci_low, ci_high = ci_high, ci_low
+        ci_low, ci_high = target_ci.ci_low, target_ci.ci_high
 
         extra.update(
             {
@@ -406,8 +412,13 @@ class WeightedStaircase:
                 "n_trials": fit.n_trials,
                 "n_levels_used": len(xs),
                 "ci_method": (
-                    "bootstrap_ci on an MLE fit to all trials' threshold, converted to the "
-                    "target_p_correct intensity holding slope/lapse fixed"
+                    "full-refit parametric bootstrap (bootstrap_ci_at_p_correct): threshold, "
+                    "slope, and lapse are all refit on every resample, and the "
+                    "target_p_correct intensity is evaluated against each resample's own "
+                    "fitted function -- not a single threshold interval converted while "
+                    "holding slope/lapse fixed at the original point estimate (see class "
+                    "docstring's 'Known limitation' section for why that approximation "
+                    "under-covered for a staircase's narrow dynamic range)"
                 ),
             }
         )

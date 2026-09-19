@@ -21,6 +21,7 @@ from vpsych.core.psychometric import (
     FitResult,
     PsychometricFunction,
     bootstrap_ci,
+    bootstrap_ci_at_p_correct,
     deviance_gof,
     fit_mle,
     intensity_at_p_correct,
@@ -181,6 +182,85 @@ def test_bootstrap_ci_rejects_fit_without_design_data() -> None:
     )
     with pytest.raises(ValueError, match="no stored design"):
         bootstrap_ci(fit)
+
+
+# --- bootstrap_ci_at_p_correct: full-refit bootstrap for WeightedStaircase's CI ---
+
+
+def test_bootstrap_ci_at_p_correct_covers_true_target_smoke() -> None:
+    """Cheap smoke test that bootstrap_ci_at_p_correct runs end-to-end and is roughly centered."""
+    rng = np.random.default_rng(21)
+    n_reps = 10
+    true_fn = PsychometricFunction(
+        family="weibull",
+        threshold=TRUE_THRESHOLD,
+        slope=TRUE_SLOPE,
+        guess=GUESS,
+        lapse=LAPSE,
+        intensity_scale="log10",
+    )
+    target_p = 0.75
+    target_x = intensity_at_p_correct(true_fn, target_p)
+    covered = 0
+    for _ in range(n_reps):
+        levels, n_correct, n_total = _simulate(rng, "weibull")
+        fit = fit_mle(levels, n_correct, n_total, family="weibull", guess=GUESS)
+        ci = bootstrap_ci_at_p_correct(fit, target_p, n_boot=40, level=0.95, rng=rng)
+        assert ci.ci_low <= ci.point_estimate <= ci.ci_high
+        assert ci.parameter == "intensity_at_p_correct"
+        if ci.ci_low <= target_x <= ci.ci_high:
+            covered += 1
+    assert covered / n_reps >= 0.4  # loose smoke bound
+
+
+def test_bootstrap_ci_at_p_correct_point_estimate_matches_intensity_at_p_correct() -> None:
+    rng = np.random.default_rng(22)
+    levels, n_correct, n_total = _simulate(rng, "weibull")
+    fit = fit_mle(levels, n_correct, n_total, family="weibull", guess=GUESS)
+    ci = bootstrap_ci_at_p_correct(fit, 0.75, n_boot=30, rng=rng)
+    assert ci.point_estimate == pytest.approx(intensity_at_p_correct(fit.function, 0.75))
+
+
+def test_bootstrap_ci_at_p_correct_is_deterministic_given_seeded_rng() -> None:
+    rng = np.random.default_rng(23)
+    levels, n_correct, n_total = _simulate(rng, "weibull")
+    fit = fit_mle(levels, n_correct, n_total, family="weibull", guess=0.5)
+    ci1 = bootstrap_ci_at_p_correct(fit, 0.75, n_boot=50, rng=np.random.default_rng(43))
+    ci2 = bootstrap_ci_at_p_correct(fit, 0.75, n_boot=50, rng=np.random.default_rng(43))
+    assert ci1.ci_low == ci2.ci_low
+    assert ci1.ci_high == ci2.ci_high
+
+
+def test_bootstrap_ci_at_p_correct_rejects_fit_without_design_data() -> None:
+    fn = PsychometricFunction(
+        family="weibull", threshold=-1.0, slope=0.3, guess=0.5, lapse=0.02, intensity_scale="log10"
+    )
+    fit = FitResult(
+        function=fn, log_likelihood=-10.0, n_trials=100, converged=True, fixed_lapse=False
+    )
+    with pytest.raises(ValueError, match="no stored design"):
+        bootstrap_ci_at_p_correct(fit, 0.75)
+
+
+def test_bootstrap_ci_at_p_correct_differs_from_threshold_only_conversion() -> None:
+    """The whole point of the full-refit bootstrap: it propagates slope/lapse resample-to-
+    resample uncertainty, so its interval generally differs from (and is typically wider than)
+    bootstrap_ci(fit, parameter="threshold") converted while holding slope/lapse fixed."""
+    rng = np.random.default_rng(24)
+    levels, n_correct, n_total = _simulate(rng, "weibull")
+    fit = fit_mle(levels, n_correct, n_total, family="weibull", guess=GUESS)
+
+    full_ci = bootstrap_ci_at_p_correct(fit, 0.75, n_boot=200, rng=np.random.default_rng(1))
+    thr_ci = bootstrap_ci(fit, n_boot=200, rng=np.random.default_rng(1), parameter="threshold")
+    low_fn = fit.function.model_copy(update={"threshold": thr_ci.ci_low})
+    high_fn = fit.function.model_copy(update={"threshold": thr_ci.ci_high})
+    fixed_ci_low = intensity_at_p_correct(low_fn, 0.75)
+    fixed_ci_high = intensity_at_p_correct(high_fn, 0.75)
+    fixed_ci_low, fixed_ci_high = min(fixed_ci_low, fixed_ci_high), max(fixed_ci_low, fixed_ci_high)
+
+    full_width = full_ci.ci_high - full_ci.ci_low
+    fixed_width = fixed_ci_high - fixed_ci_low
+    assert full_width != pytest.approx(fixed_width, rel=1e-6)
 
 
 def test_deviance_gof_p_value_in_unit_interval() -> None:
