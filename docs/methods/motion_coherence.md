@@ -198,6 +198,34 @@ criterion amplifies slope-estimation noise), not a parameterization bug --
 a larger trial budget or a steeper default slope prior would shrink it
 further, but that is a design tuning question, not part of this fix.
 
+**Phase 4 cross-check (critical_flicker_fusion slope-grid investigation).**
+`critical_flicker_fusion` was found to have a related but more severe bug:
+its slope grid was derived from the *tested domain's width* rather than
+from any realistic psychophysical value, and its own validation silently
+discarded (without reporting the rate) every run that landed in its
+display-limited regime -- see `docs/methods/critical_flicker_fusion.md`
+"Validation" for the full writeup. Checked here for the same two faults:
+
+- **Grid coverage**: `DEFAULT_SLOPE_VALUES = linspace(0.1, 1.0, 6)` is a
+  fixed, module-level constant (not domain-derived), and comfortably
+  brackets this validation's `slope_true=0.3`.
+- **Selection bias**: this test's slow validation loop has no
+  `display_limited` concept and no `continue`/skip of any kind -- every
+  simulated run's bias/coverage is counted (confirmed by inspection of
+  `test_summarize_bias_and_coverage_over_many_simulated_runs`).
+
+Re-measured directly (N=20/value, 50 trials/run, `OPENBLAS_NUM_THREADS=1`,
+independent of the checked-in N=40 test) to confirm the documented figures
+are reproducible and not stale: mean bias +0.470 (`true_log10=-1.5`),
++0.157 (`true_log10=-1.0`), -0.040 (`true_log10=-0.5`); coverage 0.80-0.90 --
+consistent with the table above (small differences from Monte Carlo noise
+at the smaller N). **Conclusion: report, not fix.** Unlike
+`critical_flicker_fusion`, this test's slope grid already covers its
+validation's true slope and its validation already counts every run
+honestly; the residual bias is the genuine, already-documented
+criterion-amplification/edge effect above, not a coverage or
+selection-bias bug.
+
 ## Citations
 
 - Newsome, W. T., & Paré, E. B. (1988). A selective impairment of motion

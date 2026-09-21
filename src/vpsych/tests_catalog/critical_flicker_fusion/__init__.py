@@ -56,16 +56,30 @@ from vpsych.tests_catalog.critical_flicker_fusion.waveform import (
 
 GUESS_RATE = 0.5  # 2AFC chance rate.
 
-MIN_REFRESH_HZ = 120.0
+MIN_REFRESH_HZ = 240.0
 """Minimum display refresh required to run this test at all -- see
-`docs/methods/critical_flicker_fusion.md` ("Requirements"): CFF in young
-observers under good conditions can approach ~60 Hz (Hecht & Shlaer 1936;
-higher under high luminance per the Ferry-Porter law), and a frame-based
-display cannot present a clean, minimally-aliased sinusoid much above
-roughly a third of its refresh rate (see `USABLE_CEILING_DIVISOR` below) --
-120 Hz keeps the usable ceiling (120/3 = 40 Hz) comfortably above typical
-human CFF values, whereas a 60 Hz display's ceiling (20 Hz) would be
-display-limited for most observers before the flicker even feels fast."""
+`docs/methods/critical_flicker_fusion.md` ("Requirements" and "Validation")
+for the full measured justification. CFF in young observers under good
+photopic conditions commonly falls in the ~30-60 Hz range (Hecht & Shlaer
+1936; higher still under high luminance per the Ferry-Porter law), and a
+frame-based display cannot present a clean, minimally-aliased sinusoid much
+above roughly a third of its refresh rate in `"continuous"` mode (see
+`USABLE_CEILING_DIVISOR` below). An earlier version of this constant was
+120 Hz (usable ceiling 40 Hz), on the claim that 40 Hz sits "comfortably
+above typical human CFF" -- that claim was false: 40 Hz is *inside*, not
+above, the realistic 30-60 Hz range, so a 120 Hz display's continuous-mode
+run is display-limited (or badly biased near the ceiling; see the module's
+`summarize` for the edge-tolerance mechanism) for a large fraction of real
+observers, as directly measured in this module's own simulated validation.
+240 Hz raises the usable ceiling to 80 Hz, comfortably above the realistic
+range with real margin. `"square_wave"` mode's ceiling is `refresh_hz / 2`
+(twice as generous, see the module docstring), so a 120 Hz display's
+square-wave ceiling (60 Hz) *would* cover most observers -- but this
+requirement is not mode-conditional (`TestRequirements`/`check_requirements`
+have no per-parameter hook, only a single `min_refresh_hz` per test), so the
+same 240 Hz floor is applied regardless of `waveform_mode` for a simple,
+uniformly-safe gate rather than a mode-dependent one. See "Requirements" in
+the docs for the measurable window at each refresh rate."""
 
 USABLE_CEILING_DIVISOR = 3.0
 """Divisor applied to the measured refresh rate to get the "usable ceiling"
@@ -86,6 +100,42 @@ DEFAULT_MIN_FREQUENCY_HZ = 2.0
 """Lowest tested flicker frequency, in Hz -- comfortably detectable by any
 sighted observer (Hecht & Shlaer 1936 report human CFF well above this even
 at low luminance), so it anchors the easy end of the QUEST+ domain."""
+
+#: `questplus`'s log10-scale Weibull slope is the classic Weibull "beta" shape
+#: exponent applied to the *linear* stimulus ratio -- here `x = -log10(f)`,
+#: so `10**(slope*(x-threshold)) == (f_threshold / f)**slope` (the same
+#: ratio-exponent form as `visual_acuity`'s `(gap_arcmin / threshold)**slope`,
+#: just on the inverted frequency ratio since performance decreases, not
+#: increases, with the raw stimulus quantity here -- see
+#: `questplus_weibull_x_at_p`'s docstring). We did not find a published
+#: source giving a direct Weibull-beta estimate for the CFF psychometric
+#: function specifically; lacking that, this grid uses the same generic
+#: typical-beta range `visual_acuity`/`vernier_acuity` use for other 2AFC
+#: near-threshold detection tasks (beta ~2-5 is typical; `questplus`'s own
+#: default is 3.5), rather than inventing a CFF-specific citation. This
+#: replaces an earlier version that derived `slope_values` from the *tested
+#: domain's width* instead (`linspace(span*0.02, span*0.5, 6)`) -- a
+#: dimensional-analysis error with no connection to psychophysics: at this
+#: test's typical domain span it gave slopes of about 0.03-0.8, values far
+#: shallower than any realistic human psychometric-function slope, which
+#: (a) could not represent a realistic (or even moderately realistic)
+#: observer at all, forcing the fit onto its own shallowest grid point, and
+#: (b) because the 75%-correct conversion divides the criterion offset by
+#: the fitted slope, an artificially shallow fit inflates the reported
+#: frequency error and, worse, spuriously pushes the fitted point toward
+#: the domain's hard edge, triggering a false `display_limited` verdict
+#: even for a threshold nowhere near the display's actual ceiling. Verified
+#: empirically (ad hoc simulation, not itself a checked-in test -- see
+#: `test_summarize_bias_and_coverage_over_many_simulated_runs` for the
+#: checked-in version) that this fixed grid, unlike the domain-derived one,
+#: comfortably brackets slopes up to 3.0 (mean bias < 0.15 log10(Hz)-
+#: equivalent `x`-units, coverage >= 0.85, no longer 100% spuriously
+#: display-limited) -- see docs/methods/critical_flicker_fusion.md
+#: "Validation" for the full measured table, including the still-degraded
+#: (but no longer catastrophic) regime for genuinely shallow (beta ~<= 0.6)
+#: observers, an honest residual limitation of the criterion-conversion
+#: itself, not of this grid.
+DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.5, 6.0, 6)]
 
 WaveformMode = Literal["continuous", "square_wave"]
 
@@ -205,7 +255,7 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
             "Weibull psychometric function, guess rate 0.5. Frame-sampled waveform honesty: "
             "per-trial DFT amplitude of the actually-presented luminance sequence is measured "
             "and compared to nominal (vpsych.tests_catalog.critical_flicker_fusion.waveform). "
-            "Requires refresh >= 120 Hz and gamma calibration grade B or better (mean luminance "
+            "Requires refresh >= 240 Hz and gamma calibration grade B or better (mean luminance "
             "must match exactly between the flickering and steady discs)."
         ),
         measures="Critical flicker-fusion frequency at 75% correct (or a display-limited lower bound).",
@@ -270,16 +320,14 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
 
     def make_procedure(self) -> QuestPlusProcedure:
         intensity_values = self._intensity_values()
-        span = max(intensity_values) - min(intensity_values)
         threshold_values = [
             float(v) for v in np.linspace(min(intensity_values), max(intensity_values), 21)
         ]
-        slope_values = [float(v) for v in np.linspace(max(span * 0.02, 1e-3), span * 0.5, 6)]
         return QuestPlusProcedure(
             intensity_values=intensity_values,
             intensity_units="neg_log10_hz",
             threshold_values=threshold_values,
-            slope_values=slope_values,
+            slope_values=DEFAULT_SLOPE_VALUES,
             guess_rate=GUESS_RATE,
             lapse_rate_values=[0.0, 0.02, 0.04],
             function="weibull",

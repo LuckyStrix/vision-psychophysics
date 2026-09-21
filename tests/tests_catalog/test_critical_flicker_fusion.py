@@ -47,7 +47,7 @@ from vpsych.tests_catalog.critical_flicker_fusion.waveform import (
 )
 
 
-def _display(refresh_hz: float = 120.0) -> DisplayGeometry:
+def _display(refresh_hz: float = 240.0) -> DisplayGeometry:
     return DisplayGeometry(
         width_px=1920,
         height_px=1080,
@@ -90,9 +90,9 @@ def _calibration(method: str = "photometer") -> Calibration:
 # ---------------------------------------------------------------------------
 
 
-def test_requirements_met_at_120hz_grade_a() -> None:
+def test_requirements_met_at_240hz_grade_a() -> None:
     reasons = check_requirements(
-        CriticalFlickerFusionTest.spec.requirements, _display(120.0), _calibration("photometer")
+        CriticalFlickerFusionTest.spec.requirements, _display(240.0), _calibration("photometer")
     )
     assert reasons == []
 
@@ -104,26 +104,38 @@ def test_requirements_reject_60hz_display() -> None:
     assert any("refresh rate" in r for r in reasons)
 
 
-def test_min_refresh_is_120hz() -> None:
-    assert MIN_REFRESH_HZ == 120.0
-    assert CriticalFlickerFusionTest.spec.requirements.min_refresh_hz == 120.0
+def test_requirements_reject_120hz_display() -> None:
+    """120 Hz's continuous-mode usable ceiling (40 Hz) is below the realistic human CFF
+    range (~30-60 Hz) -- this test's own simulated validation shows most runs land in the
+    display-limited regime even at true thresholds well under the nominal 40 Hz ceiling
+    (see docs/methods/critical_flicker_fusion.md "Requirements"/"Validation"), so 120 Hz
+    is rejected outright rather than silently returning an unreliable estimate."""
+    reasons = check_requirements(
+        CriticalFlickerFusionTest.spec.requirements, _display(120.0), _calibration("photometer")
+    )
+    assert any("refresh rate" in r for r in reasons)
+
+
+def test_min_refresh_is_240hz() -> None:
+    assert MIN_REFRESH_HZ == 240.0
+    assert CriticalFlickerFusionTest.spec.requirements.min_refresh_hz == 240.0
 
 
 def test_requirements_reject_uncalibrated_display() -> None:
-    reasons = check_requirements(CriticalFlickerFusionTest.spec.requirements, _display(120.0), None)
+    reasons = check_requirements(CriticalFlickerFusionTest.spec.requirements, _display(240.0), None)
     assert any("gamma calibration" in r for r in reasons)
 
 
 def test_requirements_reject_grade_c_calibration() -> None:
     reasons = check_requirements(
-        CriticalFlickerFusionTest.spec.requirements, _display(120.0), _calibration("none")
+        CriticalFlickerFusionTest.spec.requirements, _display(240.0), _calibration("none")
     )
     assert any("luminance grade" in r for r in reasons)
 
 
 def test_requirements_accept_grade_b_calibration() -> None:
     reasons = check_requirements(
-        CriticalFlickerFusionTest.spec.requirements, _display(120.0), _calibration("psychophysical")
+        CriticalFlickerFusionTest.spec.requirements, _display(240.0), _calibration("psychophysical")
     )
     assert reasons == []
 
@@ -284,7 +296,10 @@ def test_simulated_end_to_end_recovery_via_runner(tmp_path: Path) -> None:
     """The simulated observer's true threshold is expressed in the transformed intensity
     x = -log10(frequency_hz), per the task requirement."""
     true_x = -1.0  # corresponds to a "true CFF-ish" region around 10 Hz
-    spec = f"psychometric:threshold={true_x},slope=0.25,lapse=0.02"
+    # slope=1.5 is within the new DEFAULT_SLOPE_VALUES grid (0.5-6.0) -- realistic for a
+    # near-threshold 2AFC psychometric function; the old slope=0.25 ground truth here
+    # predates the slope-grid fix and was itself an unrealistically shallow value.
+    spec = f"psychometric:threshold={true_x},slope=1.5,lapse=0.02"
     summary = _run_session(tmp_path, spec)
 
     observer = parse_simulated_observer_spec(spec)
@@ -471,40 +486,93 @@ def test_reanalysis_matches_75pct_correct_conversion() -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("true_x", [-0.7, -0.6, -0.5])
-def test_summarize_bias_and_coverage_over_many_simulated_runs(true_x: float) -> None:
-    """Bias/coverage of *this test's* x-transform + 75%-correct conversion pipeline.
+@pytest.mark.parametrize(
+    "true_freq_hz,slope_true,max_abs_bias,min_coverage,max_display_limited_rate",
+    [
+        # Realistic thresholds (15-45 Hz, not the old 3-5 Hz) x several true slopes
+        # spanning the plausible range, INCLUDING values (1.5, 3.0) that were entirely
+        # outside the old domain-derived grid (~0.03-0.8 at this refresh) -- see
+        # DEFAULT_SLOPE_VALUES's docstring. At refresh=240 Hz (ceiling 80 Hz) these true
+        # frequencies sit well clear of the display-limited edge band (edges near ~46 Hz;
+        # see docs/methods/critical_flicker_fusion.md "Display-limited detection").
+        (15.0, 1.5, 0.3, 0.7, 0.5),
+        (20.0, 1.5, 0.3, 0.7, 0.5),
+        (30.0, 1.5, 0.3, 0.7, 0.5),
+        (20.0, 3.0, 0.3, 0.7, 0.5),
+        # A genuinely shallow (beta=0.6) observer: documents the honest, NOT-fully-fixed
+        # residual limitation -- the 75%-criterion conversion divides the fitted-slope
+        # offset by the slope itself, so a shallow true slope amplifies both bias and
+        # display-limited rate even with a grid that comfortably brackets it. This case
+        # is asserted with looser bounds, not silently dropped -- see
+        # docs/methods/critical_flicker_fusion.md "Validation" for the measured table.
+        (20.0, 0.6, 0.5, 0.7, 0.5),
+    ],
+)
+def test_summarize_bias_and_coverage_over_many_simulated_runs(
+    true_freq_hz: float,
+    slope_true: float,
+    max_abs_bias: float,
+    min_coverage: float,
+    max_display_limited_rate: float,
+) -> None:
+    """Bias/coverage/display-limited-rate of *this test's* summarize() pipeline.
 
     Ground truth is defined directly in `questplus`'s OWN Weibull
     parameterization (see `QuestPlusProcedure`'s "Criterion conversion
     pitfall" docstring and `visual_acuity`/`vernier_acuity`'s
     identically-structured validation tests) -- **not**
     `vpsych.core.psychometric.PsychometricObserver`, which uses a
-    different, incompatible sigmoid family. An earlier version of this test
-    used the `vpsych.core.psychometric` family as ground truth, which
-    conflated two independent effects: (1) the item-1 criterion-conversion
-    bug (fixed: `summarize()` now inverts `questplus`'s own fitted curve
-    via `QuestPlusProcedure.intensity_at_p_correct` rather than
-    `vpsych.core.psychometric.intensity_at_p_correct`), and (2) an
-    unrelated family-mismatch artifact from generating data under one
-    sigmoid family while fitting another. Native-family ground truth
-    isolates (1), which is what this test is actually meant to check.
+    different, incompatible sigmoid family (that conflates the criterion-
+    conversion fix with an unrelated family-mismatch artifact; see git
+    history / docs/methods/critical_flicker_fusion.md for the earlier,
+    confounded version of this test).
 
     Not a re-validation of QUEST+ itself (that belongs to
     tests/procedures/test_questplus_procedure.py, per docs/WRITING_A_TEST.md
     section 11) -- drives many independent simulated QUEST+ runs directly
-    (bypassing the trial loop/window for speed). Measured empirically
-    (N=30/true value, 50 trials/run, run with `OPENBLAS_NUM_THREADS=1`)
-    after the item-1 fix -- see docs/methods/critical_flicker_fusion.md
-    "Validation" for the full before/after table and discussion. This test
-    guards against a gross regression, not a tight calibration target.
+    through the real `CriticalFlickerFusionTest.make_procedure()`/
+    `summarize()` pipeline (bypassing the trial loop/window for speed).
+
+    **Phase 4 slope-grid fix.** An earlier version of `make_procedure()`
+    derived `slope_values` from the *width of the tested domain*
+    (`linspace(span*0.02, span*0.5, 6)`), giving slopes of roughly 0.03-0.8
+    at this refresh -- values far shallower than any realistic human
+    psychometric-function slope (see `DEFAULT_SLOPE_VALUES`'s docstring).
+    Combined with this test's *own* earlier validation always simulating
+    `slope_true=0.25` (inside that narrow, accidental grid) and silently
+    `continue`-ing past every display-limited run without reporting the
+    rate, the published bias/coverage figures were both parameter-matched
+    to pass and selection-biased. Measured with the *old* buggy grid at
+    realistic slopes (ad hoc, not itself checked in): true_f=20 Hz,
+    slope_true=1.5 -> **100% of runs display-limited** (a spurious verdict:
+    an artificially shallow slope fit pushes the 75%-point toward the
+    domain's hard edge regardless of the true threshold -- see
+    `DEFAULT_SLOPE_VALUES`'s docstring for the mechanism).
+
+    Measured with the fixed grid (`DEFAULT_SLOPE_VALUES`, N=20/case, 50
+    trials/run, refresh=240 Hz, run with `OPENBLAS_NUM_THREADS=1`) -- see
+    docs/methods/critical_flicker_fusion.md "Validation" for the full
+    table:
+
+    - true_f=15 Hz, slope=1.5: bias +0.042, coverage 0.95, 0/20 display-limited
+    - true_f=20 Hz, slope=1.5: bias +0.065, coverage 1.00, 0/20 display-limited
+    - true_f=30 Hz, slope=1.5: bias +0.044, coverage 1.00, 1/20 display-limited
+    - true_f=20 Hz, slope=3.0: bias -0.010, coverage 0.90, 0/20 display-limited
+    - true_f=20 Hz, slope=0.6: bias +0.225, coverage 0.94, 3/20 display-limited (the
+      documented, still-degraded-but-no-longer-catastrophic shallow-slope regime)
+
+    This test guards against a gross regression (e.g. the grid becoming
+    domain-derived again, or the display-limited rate silently exploding),
+    not a tight calibration target -- bounds below are generous margins
+    around the measured values, chosen per-case (looser for the known-
+    degraded shallow-slope case) rather than one blanket threshold.
     """
-    display = _display(120.0)
+    display = _display(240.0)
     cal = _calibration()
-    n_runs = 30
-    slope_true = 0.25
+    n_runs = 20
     lapse_true = 0.02
     guess = 0.5
+    true_x = frequency_to_intensity(true_freq_hz)
 
     def p_correct(x: float) -> float:
         return (
@@ -545,6 +613,12 @@ def test_summarize_bias_and_coverage_over_many_simulated_runs(true_x: float) -> 
             )
             i += 1
         summary = test.summarize(pd.DataFrame(rows))
+        # Display-limited runs are ALWAYS counted toward n_display_limited (and thus
+        # the reported rate below) -- they are excluded only from the Hz-bias/coverage
+        # statistics themselves, because a display-limited run reports a censored lower
+        # bound, not a point estimate comparable to the true 75%-point in Hz. This is
+        # the honest accounting the old version lacked (it discarded these runs from
+        # the denominator entirely, with no rate ever asserted or reported).
         if summary.estimate.extra.get("display_limited"):
             n_display_limited += 1
             continue
@@ -556,16 +630,30 @@ def test_summarize_bias_and_coverage_over_many_simulated_runs(true_x: float) -> 
         # x = -log10(f) is decreasing in f, so the Hz-domain CI bounds swap order in x.
         coverages.append(min(ci_low_x, ci_high_x) <= true_at_75 <= max(ci_low_x, ci_high_x))
 
-    assert len(biases) >= n_runs // 2, (
-        f"too many runs ({n_display_limited}/{n_runs}) landed in the display-limited regime "
-        "for a threshold well within the tested domain -- likely a regression"
+    display_limited_rate = n_display_limited / n_runs
+    assert display_limited_rate <= max_display_limited_rate, (
+        f"true_f={true_freq_hz}Hz slope={slope_true}: {n_display_limited}/{n_runs} "
+        f"({display_limited_rate:.0%}) runs landed in the display-limited regime -- "
+        "likely a regression (a spuriously shallow slope fit pushing the fitted point "
+        "toward the domain edge; see DEFAULT_SLOPE_VALUES's docstring)"
+    )
+    assert biases, (
+        f"true_f={true_freq_hz}Hz slope={slope_true}: every run "
+        f"({n_display_limited}/{n_runs}) was display-limited -- no comparable runs left "
+        "to assess bias/coverage"
     )
     mean_bias = float(np.mean(biases))
     coverage_rate = float(np.mean(coverages))
-    assert abs(mean_bias) < 0.4, (
-        f"mean bias {mean_bias:.3f} log10(Hz)-equivalent units is too large"
+    assert abs(mean_bias) < max_abs_bias, (
+        f"true_f={true_freq_hz}Hz slope={slope_true}: mean bias {mean_bias:.3f} "
+        f"log10(Hz)-equivalent units (display_limited_rate={display_limited_rate:.0%}) "
+        "is too large"
     )
-    assert coverage_rate >= 0.5, f"empirical coverage {coverage_rate:.2f} far below nominal 0.95"
+    assert coverage_rate >= min_coverage, (
+        f"true_f={true_freq_hz}Hz slope={slope_true}: empirical coverage "
+        f"{coverage_rate:.2f} (display_limited_rate={display_limited_rate:.0%}) is too "
+        "far below nominal 0.95"
+    )
 
 
 # ---------------------------------------------------------------------------
