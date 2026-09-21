@@ -22,7 +22,13 @@ what QUEST+ needs. See `waveform.frequency_to_intensity` /
 runs from `min_frequency_hz` (default 2 Hz, an easily-detected anchor) to the
 display's "usable ceiling" (`refresh_hz / 3`, see below). Psychometric
 function: fixed-family Weibull, guess rate 0.5 (2AFC), free lapse rate from
-`[0.0, 0.02, 0.04]`.
+`[0.0, 0.02, 0.04]`. QUEST+'s `threshold_values` grid spans the tested
+domain (21 points), but `slope_values` is **not** domain-derived -- it is
+the fixed `DEFAULT_SLOPE_VALUES` constant (a generic typical-beta range for
+2AFC near-threshold psychometric functions, the same convention
+`visual_acuity`/`vernier_acuity` use), independent of `refresh_hz` or
+`min_frequency_hz`. See "Validation" below for why a domain-derived slope
+grid was a bug, not a design choice.
 
 **Task**: 2AFC. Two identical discs appear left and right of fixation, same
 mean luminance; one flickers, one stays steady; the observer presses the
@@ -179,13 +185,14 @@ the honest choice when the display itself cannot resolve the difference.
   must be gamma-linearized and must match *exactly* between the flickering
   and steady discs, or an uncontrolled luminance difference becomes a cue
   independent of flicker.
-- `min_refresh_hz = 120`: CFF in young observers under good photopic
-  conditions can approach or exceed 60 Hz (Hecht & Shlaer 1936; higher still
+- `min_refresh_hz = 240` (**changed from an earlier 120 Hz -- see "Why 240,
+  not 120" below**): CFF in young observers under good photopic conditions
+  commonly falls in the ~30-60 Hz range (Hecht & Shlaer 1936; higher still
   at high luminance per the Ferry-Porter law), and a frame-based display's
-  usable ceiling is only about a third of its refresh rate (see above) --
-  120 Hz keeps the usable ceiling (40 Hz) comfortably above typical human
-  CFF, whereas a 60 Hz display's ceiling (20 Hz) would be display-limited
-  for most observers before the flicker even feels fast.
+  `"continuous"`-mode usable ceiling is only about a third of its refresh
+  rate (see above). 240 Hz gives a usable ceiling of 80 Hz, comfortably
+  clear of that range with real margin; a 120 Hz display's ceiling (40 Hz)
+  sits *inside*, not above, the realistic range.
 - `stimulus_params["eccentricity_deg"]` is logged every trial (CFF varies
   with retinal eccentricity).
 - `TestSummary.quality_flags` always includes an `info`-severity
@@ -196,6 +203,63 @@ the honest choice when the display itself cannot resolve the difference.
   the panel's liquid crystals physically achieve in the available time. A
   photodiode check (`tools/timing_check.py`) against the actual panel is
   recommended, especially near a run's usable ceiling.
+
+### Why 240 Hz, not 120 Hz (or a mode-conditional requirement)
+
+An earlier version of this test required only `refresh_hz >= 120`, reasoning
+that a 120 Hz display's 40 Hz `"continuous"`-mode ceiling was "comfortably
+above typical human CFF." That claim was false -- 40 Hz sits *inside*
+Hecht & Shlaer's realistic 30-60 Hz range, not above it -- and this module's
+own simulated validation confirms the practical consequence directly: at
+120 Hz, even a true CFF as low as 30 Hz (well under the nominal 40 Hz
+ceiling) already lands the majority of simulated runs in the
+`display_limited` regime (13-15 out of 15 runs across the slopes tested; see
+"Validation" below), because the domain-edge tolerance band
+(`EDGE_TOLERANCE_FRAC`, 15% of the tested span) reaches much further into
+the domain when the ceiling itself is low. 120 Hz was, in practice, mostly
+unable to measure a realistic observer's CFF at all -- it would silently
+report a lower bound (or a biased point estimate near the edge) for most
+runs, not a trustworthy number.
+
+240 Hz (ceiling 80 Hz) fixes this with real margin: the same simulated
+battery at 240 Hz shows low display-limited rates (0-3 out of 20-15 runs)
+and small bias for true thresholds up to 30 Hz, only rising again as the
+true threshold approaches the ceiling itself (as it honestly should).
+
+Two other options were considered and rejected for now:
+
+- **A mode-conditional requirement** (allow 120 Hz *only* in `"square_wave"`
+  mode, whose ceiling is `refresh_hz / 2` = 60 Hz, closer to the realistic
+  range): `TestRequirements`/`check_requirements`
+  (`vpsych.tests_catalog.base`) express a single `min_refresh_hz` per test,
+  with no hook for a requirement that depends on the test's own configured
+  parameters (`waveform_mode` here). Building that hook would touch shared
+  infrastructure used by every test in the catalog, well beyond this fix's
+  scope. A simple, uniformly-safe 240 Hz floor was chosen instead of a
+  narrower, mode-aware one; a future revision could add the hook and relax
+  this for `"square_wave"` mode specifically.
+- **Leaving 120 Hz allowed and relying only on the `display_limited` flag**:
+  rejected because, per the measurement above, that flag would fire on the
+  *majority* of runs at 120 Hz even for realistic (non-extreme) observers --
+  technically honest (never a fabricated point value), but practically
+  useless as the normal outcome of a 4-minute test. Refusing to run below
+  240 Hz is the more useful honest behavior: an explicit refusal up front,
+  not a near-certain "display-limited" result at the end.
+
+**Measurable window per refresh rate** (`"continuous"` mode, `min_frequency_hz`
+default 2 Hz):
+
+| `refresh_hz` | Usable ceiling | Allowed by `check_requirements`? | Practical window |
+|---|---|---|---|
+| 120 | 40 Hz | No (`min_refresh_hz=240`) | Effectively unusable for realistic CFF (see above) |
+| 240 | 80 Hz | Yes | Accurate roughly up to ~30 Hz for typical-to-steep observers (slope >= ~1.5); increasingly display-limited (correctly) as true CFF approaches ~45+ Hz |
+| 360+ | 120+ Hz | Yes | Same accurate window, with more margin before the edge band |
+
+`"square_wave"` mode's ceiling is `refresh_hz / 2` at any refresh (not
+gated differently by `check_requirements`, per the policy above), so a
+240 Hz display running `waveform_mode="square_wave"` reaches a 120 Hz
+ceiling, comfortably past the realistic range, at the cost of only testing
+the discrete frequency grid `refresh_hz / (2k)`.
 
 ## Output
 
@@ -209,7 +273,7 @@ as a point estimate.
 
 Simulated end-to-end recovery
 (`tests/tests_catalog/test_critical_flicker_fusion.py::test_simulated_end_to_end_recovery_via_runner`):
-80 trials against a `psychometric:threshold=-1.0,slope=0.25,lapse=0.02`
+80 trials against a `psychometric:threshold=-1.0,slope=1.5,lapse=0.02`
 observer (expressed directly in the transformed intensity, per the task
 requirement) recovers a threshold within 0.5 log10-Hz of the known
 75%-correct target when not display-limited. The display-limited path is
@@ -221,62 +285,107 @@ trials all-correct at the hardest grid point) -- see "Display-limited
 detection" above for why these need a larger trial count than the smoke-level
 recovery check.
 
-**Bias/coverage of this test's own `summarize()` conversion**
-(`@pytest.mark.slow` `test_summarize_bias_and_coverage_over_many_simulated_runs`)
--- **Phase 4 criterion-conversion pitfall fix and re-measurement.** An
-earlier version of `summarize()` built a
-`vpsych.core.psychometric.PsychometricFunction` directly from the raw
-QUEST+ estimate and converted it via
-`vpsych.core.psychometric.intensity_at_p_correct` -- silently the *wrong*
-formula for a `QuestPlusProcedure` fit (see
-`vpsych.core.procedures.questplus_procedure`'s "Criterion conversion
-pitfall" docstring section). That version, measured at N=50 simulated
-50-trial runs against a `threshold=-1.0, slope=0.25, lapse=0.02`
-(`vpsych.core.psychometric`-family) observer (all runs landed in the
-non-display-limited regime): mean bias **+0.22 log10(Hz) units** (SD 0.17),
-**80%** empirical coverage of the nominal 95% credible interval.
+### Phase 4: the slope-grid bug, and its fix
 
-`summarize()` now uses the correct, shared
-`QuestPlusProcedure.intensity_at_p_correct`. Re-measuring with that same
-`vpsych.core.psychometric`-family ground truth turned out to be
-uninformative here: at `threshold=-1.0` the great majority of runs (43/50 in
-one re-measurement) now land in the *display-limited* regime and are
-excluded from the bias/coverage statistic entirely (a direct, mechanical
-consequence of the fix -- see below), leaving too few comparable runs for a
-meaningful before/after bias comparison at that specific true value.
+An earlier version of `make_procedure()` derived `slope_values` from the
+*width of the tested domain* rather than from any property of human
+psychophysics: `linspace(max(span*0.02, 1e-3), span*0.5, 6)`, which at a
+240 Hz display gives slopes of roughly **0.03-0.80** -- values far shallower
+than a realistic human psychometric-function slope (see
+`DEFAULT_SLOPE_VALUES`'s docstring in
+`vpsych.tests_catalog.critical_flicker_fusion` for the literature/generic-
+beta reasoning behind the replacement). This one bug compounded three ways:
 
-Re-measured properly instead with ground truth defined directly in
-`questplus`'s own native parameterization (matching
-`visual_acuity`/`vernier_acuity`'s validation approach, which avoids the
-family-mismatch confound entirely -- see
-`test_summarize_bias_and_coverage_over_many_simulated_runs`, now
-parametrized over 3 true values, N=30/value, 50 trials/run): mean bias
-**-0.24 to -0.36** log10(Hz)-equivalent `x`-units (`x = -log10(f)`) across
-`true_x` in `{-0.7, -0.6, -0.5}` (~5.0, ~4.0, ~3.2 Hz), with CI coverage
-0.73-0.87 -- closer to, but still somewhat below, nominal 95%. Two things
-explain both numbers honestly:
+1. **The grid could not represent a realistic observer.** A true slope of
+   1.5 or 3.0 (plausible for a near-threshold 2AFC psychometric function,
+   comparable to the beta~2-5 typical range used by `visual_acuity`'s and
+   `vernier_acuity`'s own grids) was entirely outside the domain-derived
+   grid, forcing QUEST+'s fit onto its own shallowest available point
+   regardless of the data.
+2. **The 75%-criterion conversion divides by the fitted slope**
+   (`questplus_weibull_x_at_p`'s `log10(-ln(q)) / slope` term), so an
+   artificially shallow fit doesn't just misestimate the slope -- it
+   *amplifies* the reported frequency's error by roughly `1/slope`.
+3. **That amplified offset pushed the fitted 75%-point toward the domain's
+   hard edge**, spuriously triggering the `cff_display_limited` flag even
+   for a true threshold nowhere near the display's actual ceiling. Measured
+   directly (ad hoc simulation, not itself checked in): with the old grid at
+   240 Hz, a true CFF of 20 Hz with a true slope of 1.5 or 3.0 landed
+   **100% of simulated runs** in the display-limited regime -- a false
+   verdict, not a real ceiling effect.
 
-- **Why the display-limited fraction increased**: `questplus`'s own native
-  anchor sits at the ~80%-of-range point for this test's `guess=0.5`
-  (`0.5 + (1 - 0.5 - lapse) * (1 - e^-1) ~= 0.80`), *above* the 75%
-  conventional criterion this test reports. Converting a fitted curve down
-  from ~80% to 75% moves the reported point *toward* the domain's
-  high-frequency ceiling (`x` decreases as `f` increases), so the fix
-  itself pushes borderline-central true values closer to the
-  `display_limited` edge-tolerance band -- a real, expected consequence of
-  reporting an honest, correctly-derived criterion rather than an artifact.
-- **Why coverage is still below nominal**: the reported CI is the raw
-  QUEST+ credible interval shifted by a single additive offset, exact only
-  to the extent the fitted slope/lapse posterior means are themselves
-  well-estimated; at 50 trials on a threshold+slope+lapse joint posterior
-  they are not always precise, so the *shape* (not just location) of the
-  true sampling distribution is under-represented by a pure shift of the
-  raw interval. A slope-and-lapse-aware re-derivation of the CI (e.g. via
-  bootstrap resampling in `x`-space, mirroring `WeightedStaircase`'s
-  approach) would likely improve coverage further and is a reasonable
-  future improvement; the `@pytest.mark.slow` test itself uses a loose
-  coverage floor (`>= 0.5`) so it still catches a gross regression without
-  being a tight calibration gate on an already-documented limitation.
+Compounding this, the test's own slow validation
+(`test_summarize_bias_and_coverage_over_many_simulated_runs`) simulated only
+`slope_true=0.25` -- a value that happened to fall *inside* the narrow,
+accidental old grid -- and `continue`d silently past every display-limited
+run without ever reporting the rate. So the published bias/coverage figures
+were simultaneously parameter-matched to a value that couldn't expose the
+bug, and selection-biased (silently discarding runs rather than reporting
+how many were censored).
+
+**The fix** (`DEFAULT_SLOPE_VALUES = linspace(0.5, 6.0, 6)`, module-level,
+independent of the tested domain's width -- see its docstring) mirrors
+`visual_acuity`/`vernier_acuity`'s own generic-beta grids: no published
+source was found giving a CFF-specific Weibull-beta estimate, so (following
+those two tests' precedent) this uses the same typical beta~2-5 range
+documented for 2AFC near-threshold detection tasks generally, rather than
+inventing a CFF-specific citation, and was verified empirically (see below)
+to bracket realistic slopes with margin.
+
+### Measured bias / coverage / display-limited rate (current, post-fix)
+
+Re-measured via `test_summarize_bias_and_coverage_over_many_simulated_runs`,
+now parametrized over realistic true thresholds (15-45 Hz, not the old
+3-5 Hz) and several true slopes spanning the plausible range -- including
+1.5 and 3.0, both entirely outside the old grid. Ground truth is defined
+directly in `questplus`'s own native Weibull parameterization (matching
+`visual_acuity`/`vernier_acuity`'s validation approach, avoiding the
+family-mismatch confound a `vpsych.core.psychometric`-family ground truth
+would introduce -- see `QuestPlusProcedure`'s "Criterion conversion
+pitfall" docstring). N=20 runs/case, 50 trials/run, `refresh_hz=240`
+(ceiling 80 Hz), run with `OPENBLAS_NUM_THREADS=1`. **The display-limited
+rate is reported for every case, not discarded** -- bias/coverage are
+computed only over the non-display-limited runs within each case (a
+display-limited run reports a censored lower bound, not a point estimate
+comparable in Hz), but the censored fraction itself is always shown:
+
+| true CFF | true slope | mean bias (log10-Hz-equivalent `x`) | CI coverage | display-limited rate |
+|---|---|---|---|---|
+| 15 Hz | 1.5 | +0.042 | 0.95 | 0/20 (0%) |
+| 20 Hz | 1.5 | +0.065 | 1.00 | 0/20 (0%) |
+| 30 Hz | 1.5 | +0.044 | 1.00 | 1/20 (5%) |
+| 20 Hz | 3.0 | -0.010 | 0.90 | 0/20 (0%) |
+| 20 Hz | 0.6 | +0.225 | 0.94 | 3/20 (15%) |
+
+For comparison, the *old* domain-derived grid at the same refresh/true
+values (ad hoc, not checked in): true CFF 20 Hz, true slope 1.5 ->
+100% display-limited (no comparable point-estimate runs at all); true CFF
+20-30 Hz, true slope 0.25 (the old validation's only tested slope) -> mean
+bias +0.45 to +0.70, coverage as low as 0.11-0.22 once the grid no longer
+happened to bracket the observer's actual slope.
+
+**Where this test is, and is not, accurate**, stated explicitly:
+
+- **Accurate** (bias typically < 0.1 log10-Hz-equivalent units, coverage
+  >= 0.9, display-limited rate low): true CFF roughly 15-30 Hz at a 240 Hz
+  display, for observers with a typical-to-steep psychometric slope
+  (>= ~1.5 in this `x = -log10(f)` parameterization).
+- **Degraded but not fabricated**: for a genuinely shallow observer (slope
+  ~0.6), bias grows to ~0.2-0.5 log10-Hz-equivalent units and the
+  display-limited rate rises -- the 75%-criterion conversion's `1/slope`
+  amplification (see above) is a property of the conversion itself, not
+  something a wider slope grid can fix, since the grid already brackets
+  0.6 comfortably. This is an honest residual limitation, not swept under
+  the old validation's selection bias.
+- **Correctly refuses a point estimate, rather than reporting a wrong one**,
+  as true CFF approaches the display's usable ceiling (the display-limited
+  rate rises toward the edge, as intended -- see "Display-limited
+  detection" above).
+- **Not measurable at all** on a 120 Hz display in `"continuous"` mode
+  (rejected outright by `check_requirements`; see "Why 240 Hz, not 120 Hz"
+  above) -- its 40 Hz ceiling sits inside, not above, the realistic human
+  CFF range, and the same simulated battery at 120 Hz shows the majority of
+  runs display-limited even at a true CFF of 30 Hz.
 
 ## Citations
 
