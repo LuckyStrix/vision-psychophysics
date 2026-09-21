@@ -186,6 +186,12 @@ def csf_figure(summary: TestSummary) -> Figure:
 
     # Extract CSF curve data from extra
     extra = summary.estimate.extra
+    # A real `contrast_sensitivity_function` summary nests the curve under "csf_curve"
+    # (written by its `summarize`); flat keys are also accepted so a caller can pass a
+    # bare `csf_curve()` result straight through.
+    curve = extra.get("csf_curve") if extra else None
+    if isinstance(curve, dict) and "spatial_frequency_cpd" in curve:
+        extra = {**extra, **curve}
     if not extra or "spatial_frequency_cpd" not in extra:
         ax.text(
             0.5,
@@ -211,14 +217,16 @@ def csf_figure(summary: TestSummary) -> Figure:
     # Plot mean curve
     ax.plot(freqs, mean_cs, "-", color=_PALETTE["blue"], linewidth=2, label="Mean")
 
-    # Shade tested frequency range
-    if hasattr(summary, "fit_params") and summary.fit_params:
-        freq_range_info = summary.fit_params.get("freq_range_tested", {})
-        if freq_range_info:
-            freq_min = freq_range_info.get("min_cpd")
-            freq_max = freq_range_info.get("max_cpd")
-            if freq_min is not None and freq_max is not None:
-                ax.axvspan(freq_min, freq_max, alpha=0.1, color=_PALETTE["orange"])
+    # Shade the frequency range this display/distance could actually test.
+    freq_range = extra.get("frequency_range_tested_cpd")
+    if isinstance(freq_range, (list, tuple)) and len(freq_range) == 2:
+        ax.axvspan(
+            float(freq_range[0]),
+            float(freq_range[1]),
+            alpha=0.1,
+            color=_PALETTE["orange"],
+            label="Frequencies tested",
+        )
 
     ax.set_xscale("log")
     ax.set_xlabel("Spatial Frequency (cpd)")
@@ -226,9 +234,13 @@ def csf_figure(summary: TestSummary) -> Figure:
 
     # Include AULCSF in title if available
     title = f"{summary.task_id}: Contrast Sensitivity Function"
-    if "aulcsf" in extra:
-        aulcsf = extra["aulcsf"]
-        title += f" (AULCSF={aulcsf:.2f})"
+    # A real summary reports AULCSF as the estimate itself; a bare curve dict may carry it
+    # in "aulcsf" instead.
+    aulcsf = extra.get("aulcsf")
+    if aulcsf is None and "aulcsf" in summary.estimate.units:
+        aulcsf = summary.estimate.value
+    if aulcsf is not None:
+        title += f" (AULCSF={float(aulcsf):.2f})"
 
     ax.set_title(title)
     ax.grid(True, alpha=0.3, which="both")

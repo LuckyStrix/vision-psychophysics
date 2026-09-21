@@ -501,6 +501,10 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
         extra["cutoff_spatial_frequency_cpd"] = self._acuity_cutoff_cpd(
             estimate.extra["posterior_mean"]
         )
+        # Figure-ready curve, stored so `vpsych.reports.figures.csf_figure` can plot a
+        # real session without re-deriving the posterior (and so an exported summary is
+        # self-describing). Deterministic, like the rest of `summarize`.
+        extra["csf_curve"] = self.csf_curve(trials)
         estimate_with_extra = ThresholdEstimate(
             value=estimate.value,
             ci_low=estimate.ci_low,

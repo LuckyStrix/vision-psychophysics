@@ -467,3 +467,33 @@ def test_quality_badges_multiple() -> None:
     assert badges[0][0] == "flag_1"
     assert badges[1][1] == "warning"
     assert badges[2][2] == "Third flag"
+
+
+def test_csf_figure_uses_a_real_summary_not_just_a_fixture() -> None:
+    """Regression: `csf_figure` must plot a summary produced by the real CSF test.
+
+    The curve lives under `extra["csf_curve"]` (written by
+    `ContrastSensitivityFunctionTest.summarize`), not as flat keys. An earlier version of
+    this module only read flat keys, so every real session silently rendered the
+    "No CSF curve data available" placeholder while hand-built fixtures passed.
+    """
+    import sys
+
+    if "tests" not in sys.path:
+        sys.path.insert(0, "tests")
+    from tests_catalog.test_contrast_sensitivity_function import (  # type: ignore[import-not-found]
+        _make_test,
+        _trials_fixture,
+    )
+
+    test = _make_test(max_trials=40)
+    summary = test.summarize(_trials_fixture(test))
+
+    assert "csf_curve" in summary.estimate.extra, (
+        "summarize() must store the figure-ready curve for the reports layer"
+    )
+    fig = csf_figure(summary)
+    ax = fig.axes[0]
+    assert "No CSF curve data available" not in [t.get_text() for t in ax.texts]
+    assert ax.lines, "expected a plotted CSF curve"
+    assert "AULCSF" in ax.get_title()
