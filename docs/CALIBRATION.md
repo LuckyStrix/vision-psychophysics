@@ -118,6 +118,95 @@ This is the only grade that gives an absolute luminance scale (`Lmin`,
 `Lmax` in cd/m^2) and hence is required for anything reporting or targeting
 an absolute contrast/luminance value.
 
+#### Using an X-Rite ColorMunki via ArgyllCMS `spotread`
+
+`vpsych.core.calibration.argyll` is a second grade-A backend, alongside the
+`psychopy.hardware`-based one above, driving ArgyllCMS's `spotread` command
+(tested against ArgyllCMS 2.3.1) as a subprocess -- no ArgyllCMS Python
+bindings, no separate hardware SDK. It satisfies the same `Photometer`
+protocol (`core/calibration/photometer.py`), so it drops directly into
+`measure_gamma`/`measure_gamma_per_channel`, and additionally exposes full
+CIE XYZ (`ArgyllSpotreadPhotometer.measure_xyz`) for measuring R/G/B/white
+primaries -- grade-A `ColorCalibration`, the one thing nothing else in this
+codebase can currently produce.
+
+**Install ArgyllCMS.** On Debian/Ubuntu, `apt install argyll` (or download
+from <https://www.argyllcms.com/>). This gives `/usr/bin/spotread`,
+`dispcal`, `dispread`, etc.; only `spotread` is used here (in emissive spot
+mode -- it is driven interactively as if reading one arbitrary point on the
+screen, not through Argyll's own display-calibration workflow).
+
+**Linux udev/permission caveat.** X-Rite instruments (ColorMunki Photo and
+Display included) are USB HID devices that a non-root user cannot normally
+open directly. ArgyllCMS ships udev rules for this
+(`usr/share/doc/argyll/*.rules` on a Debian package install, or
+`Tools/USB/*.rules` in an ArgyllCMS source/binary distribution) that must be
+installed to `/etc/udev/rules.d/` and the udev database reloaded
+(`sudo udevadm control --reload-rules && sudo udevadm trigger`) before
+`spotread` can see the device as a non-root user; without this, `spotread`
+reports "no instrument detected" (see below) even with the ColorMunki
+physically plugged in, indistinguishable from it not being connected at
+all -- if detection fails, check `lsusb` shows the device and re-check the
+udev rules before assuming it's a cabling problem.
+
+**The two supported instruments, and why the invocation differs:**
+
+- **ColorMunki Photo** (a spectrometer): `spotread -e` -- no `-y` flag.
+  It measures an actual light spectrum, so it needs no per-panel-technology
+  correction table. It has a physical sliding calibration cover and needs
+  an explicit calibration step (cover closed) before its first emissive
+  reading in a session; `spotread` prompts for this interactively, and
+  `argyll.py` surfaces it as `ArgyllCalibrationRequiredError` (with
+  `spotread`'s own prompt text) rather than guessing when it happens or
+  silently skipping it.
+- **ColorMunki Display** (a colorimeter): `spotread -e -y l` (`-y c` for a
+  CRT). It measures through fixed color filters onto photodiodes, so its
+  reading needs a display-technology correction (`-y`) to be applied for
+  the result to be accurate; `l` (LCD) is the default and covers virtually
+  all modern flat panels (Argyll has no separate OLED profile).
+
+**Why a pseudo-terminal, not a plain pipe.** `spotread` is an interactive
+console program: its "place the instrument and hit any key" prompts read a
+single raw keystroke from its *controlling terminal*, not from line-buffered
+stdin. `ArgyllSpotreadSession` allocates a pseudo-terminal (Python's `pty`
+module) and attaches the subprocess to it, exactly as running `spotread`
+from an interactive shell would, then drives it by writing single
+characters and reading lines back.
+
+**Non-interactive operation and output parsing.** The interaction logic
+(waiting for a calibration or measurement prompt, sending a keystroke,
+parsing the result) is implemented as a pure state machine,
+`SpotreadProtocol`, over two injected callables (`next_line`, `send_key`),
+independent of the real pty/subprocess plumbing (`ArgyllSpotreadSession`).
+This is what makes `tests/core/test_calibration_argyll.py` exercise the
+whole protocol -- including an end-to-end run through `measure_gamma`/
+`measure_gamma_per_channel` recovering a known synthetic gamma curve --
+with zero real `spotread` processes launched during the test suite.
+`spotread`'s result line (`"Result is XYZ: <X> <Y> <Z>, ..."`) is parsed
+directly for XYZ; this is stable across `spotread`'s `-x`/`-h`/`-u`
+secondary-format flags (they only change what follows the XYZ triple), so
+none of them need to be passed. Prompt lines are matched by keyword
+(`"calibrat..."`, `"place instrument"`/`"spot to be measured"`) rather than
+an exact string, since exact `spotread` prompt wording could not be
+verified without the physical device in this build -- see the caveat below.
+
+**What is verified vs. what needs live hardware.** The "no instrument
+attached" failure path (`spotread -e` exits fast with "Diagnostic: Unknown,
+inappropriate or no instrument detected") was captured from a real
+ArgyllCMS 2.3.1 `spotread -e` run in this environment (the ColorMunki was
+not plugged in) and is committed verbatim as a test fixture. The successful
+calibration-prompt and measurement/result interaction has **not** been
+run against real hardware in this build; `SpotreadProtocol`'s tests use
+representative (not device-captured) prompt/result text modelled on
+ArgyllCMS's documented `spotread` behavior. Before trusting a grade-A
+calibration produced this way, plug in a ColorMunki and run the
+calibration wizard's photometer step once, watching for: (a) whether the
+calibration-prompt keyword match actually fires for the real prompt
+wording, (b) whether the pty-based keystroke driving works as expected
+end to end, and (c) whether measured luminance/chromaticity values are
+physically sane (e.g. white point luminance and CCT roughly match the
+panel's actual output).
+
 ### Grade B: psychophysical (no photometer)
 
 When no photometer is available, gamma can still be *estimated* (not

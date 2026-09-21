@@ -497,3 +497,40 @@ def test_csf_figure_uses_a_real_summary_not_just_a_fixture() -> None:
     assert "No CSF curve data available" not in [t.get_text() for t in ax.texts]
     assert ax.lines, "expected a plotted CSF curve"
     assert "AULCSF" in ax.get_title()
+
+
+def test_psychometric_figure_draws_a_fit_curve_from_a_real_summary() -> None:
+    """Regression: `psychometric_figure` must draw a fit curve for a real test's summary.
+
+    No real test in `tests_catalog` writes a `"threshold"`/`"slope"` pair under exactly
+    those literal key names (each names its slope after its own intensity units, e.g.
+    `visual_acuity`'s `"slope"` alongside `"guess_rate"`/`"lapse_rate"`, not
+    `"guess"`/`"lapse"`) -- an earlier version of this function only recognized those exact
+    keys, which matched a hand-built fixture but meant no real session ever drew a fit
+    curve, silently. The threshold must come from `estimate.value` and the slope from any
+    `fit_params` key starting with `"slope"`.
+    """
+    import sys
+
+    if "tests" not in sys.path:
+        sys.path.insert(0, "tests")
+    from tests_catalog.test_visual_acuity import (  # type: ignore[import-not-found]
+        _make_test,
+        _trials_fixture,
+    )
+
+    test = _make_test()
+    trials = _trials_fixture(test, n_main=40, n_catch=4)
+    summary = test.summarize(trials)
+
+    assert summary.fit_params, "expected visual_acuity to report fit_params"
+    assert "threshold" not in summary.fit_params, (
+        "this test's real fit_params never contain a literal 'threshold' key -- if this "
+        "assertion starts failing, the regression it guards against may already be fixed "
+        "some other way"
+    )
+
+    fig = psychometric_figure(summary, trials)
+    ax = fig.axes[0]
+    labels = [line.get_label() for line in ax.get_lines()]
+    assert "Fit" in labels, "expected a plotted logistic fit curve from a real summary"

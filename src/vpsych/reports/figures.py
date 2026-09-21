@@ -34,6 +34,25 @@ _EYE_COLORS = {
 }
 
 
+def _find_slope_param(fit_params: dict) -> float | None:
+    """Find a psychometric-function slope in `fit_params`, tolerant of each real test's
+    own key naming (e.g. `visual_acuity`'s `"slope"`, `letter_contrast_sensitivity`'s
+    `"slope_log10_contrast"`, `critical_flicker_fusion`'s `"slope_neg_log10_hz"`) rather
+    than requiring one exact key name.
+
+    Args:
+        fit_params: A `TestSummary.fit_params` dict.
+
+    Returns:
+        The first numeric value found under a key starting with `"slope"`
+        (case-insensitive), or `None` if there is none.
+    """
+    for key, value in fit_params.items():
+        if key.lower().startswith("slope") and isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
 def psychometric_figure(summary: TestSummary, trials: pd.DataFrame) -> Figure:
     """Plot observed proportion-correct binned by intensity, fitted curve, and threshold.
 
@@ -113,12 +132,24 @@ def psychometric_figure(summary: TestSummary, trials: pd.DataFrame) -> Figure:
         # draw a smooth curve across the range
         x_range = np.linspace(intensities.min(), intensities.max(), 100)
 
-        # Try to fit a simple logistic if we have classic params
-        if "threshold" in summary.fit_params and "slope" in summary.fit_params:
-            threshold = summary.fit_params["threshold"]
-            slope = summary.fit_params["slope"]
-            lapse = summary.fit_params.get("lapse", 0.02)
-            guess = summary.fit_params.get("guess", 0.5)
+        # Try to fit a simple logistic if we have classic params. No real test in
+        # tests_catalog writes a "threshold"/"slope" pair under exactly those names (each
+        # names its slope after its own intensity units, e.g. "slope_log10_contrast",
+        # "slope_neg_log10_hz") -- an earlier version of this function only recognized the
+        # literal keys "threshold"/"slope"/"lapse"/"guess", which matched hand-built test
+        # fixtures but never a real summarize() output, so no real session ever drew a fit
+        # curve. The threshold instead always comes from `summary.estimate.value` (already
+        # used below for the annotation, and always in the same units as `intensity`), and
+        # the slope from any fit_params key starting with "slope".
+        threshold = summary.estimate.value
+        slope = _find_slope_param(summary.fit_params)
+        if threshold is not None and slope is not None:
+            lapse = float(
+                summary.fit_params.get("lapse_rate", summary.fit_params.get("lapse", 0.02))
+            )
+            guess = float(
+                summary.fit_params.get("guess_rate", summary.fit_params.get("guess", 0.5))
+            )
 
             # Logistic: y = guess + (1 - guess - lapse) * inv_logit((x - threshold) * slope)
             inv_logit = 1.0 / (1.0 + np.exp(-slope * (x_range - threshold)))

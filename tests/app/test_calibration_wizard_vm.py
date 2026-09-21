@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from vpsych.app.viewmodels.calibration_wizard import (
+    DEFAULT_BISECTION_FRACTIONS,
+    BisectionSequenceState,
     CalibrationWizardState,
     ColorStepState,
     GammaStepState,
@@ -180,3 +182,63 @@ def test_build_calibration_full_success() -> None:
     # instant gives the same hash.
     calibration2 = state.build_calibration(software_version="0.1.0", now=calibration.created_utc)
     assert calibration.content_hash() == calibration2.content_hash()
+
+
+# ---------------------------------------------------------------------------
+# BisectionSequenceState (psychophysical gamma UI)
+# ---------------------------------------------------------------------------
+
+
+def test_bisection_sequence_starts_at_first_fraction() -> None:
+    seq = BisectionSequenceState()
+    assert seq.current_fraction == DEFAULT_BISECTION_FRACTIONS[0]
+    assert seq.is_complete is False
+    assert seq.progress_text == f"Level 1 of {len(DEFAULT_BISECTION_FRACTIONS)}."
+
+
+def test_bisection_sequence_adjust_clamps_to_open_interval() -> None:
+    seq = BisectionSequenceState(current_level=0.5)
+    seq.adjust(-10.0)
+    assert seq.current_level == pytest.approx(0.005)
+    seq.adjust(10.0)
+    assert seq.current_level == pytest.approx(0.995)
+
+
+def test_bisection_sequence_confirm_match_advances_and_resets_level() -> None:
+    seq = BisectionSequenceState(fractions=(0.2, 0.8))
+    seq.adjust(0.1)  # 0.6
+    seq.confirm_match()
+    assert seq.matches == [(0.2, pytest.approx(0.6))]
+    assert seq.current_level == 0.5
+    assert seq.current_fraction == 0.8
+    assert seq.is_complete is False
+
+    seq.confirm_match()
+    assert seq.is_complete is True
+    assert seq.current_fraction is None
+    assert len(seq.matches) == 2
+
+
+def test_bisection_sequence_confirm_match_after_complete_raises() -> None:
+    seq = BisectionSequenceState(fractions=(0.5,))
+    seq.confirm_match()
+    with pytest.raises(WizardStepError):
+        seq.confirm_match()
+
+
+def test_bisection_sequence_result_needs_two_matches() -> None:
+    seq = BisectionSequenceState(fractions=(0.5,))
+    seq.confirm_match()
+    with pytest.raises(WizardStepError):
+        seq.result()
+
+
+def test_bisection_sequence_result_recovers_a_known_gamma() -> None:
+    gamma = 2.2
+    seq = BisectionSequenceState(fractions=(0.2, 0.4, 0.6, 0.8))
+    for p in seq.fractions:
+        seq.current_level = p ** (1.0 / gamma)
+        seq.confirm_match()
+    estimate = seq.result()
+    assert estimate.gamma == pytest.approx(gamma, rel=1e-6)
+    assert estimate.n_levels == 4

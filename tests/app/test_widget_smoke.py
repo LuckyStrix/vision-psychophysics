@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests.app.conftest import requires_offscreen_qt
 from vpsych.app.state import AppState
 
@@ -65,6 +67,37 @@ def test_results_screen_constructs(qapp, tmp_path: Path) -> None:
 
 
 @requires_offscreen_qt
+def test_results_screen_renders_a_figure_canvas_from_a_real_summary(
+    qapp, tmp_path: Path, registered_dummy_test
+) -> None:
+    """Regression guard for the Results screen's figure wiring.
+
+    Builds a complete on-disk session with a summary written by
+    `DummyTest.summarize` (a real, registered `PsychophysicalTest`, not a
+    hand-built fixture dict) and checks the results screen actually embeds a
+    `FigureCanvasQTAgg` for it, not just the old "figure generated (not
+    wired up)" placeholder text.
+    """
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+    from tests.data.conftest import build_full_session
+    from vpsych.app.screens.results import ResultsScreen
+    from vpsych.data import catalog
+
+    participant_id, _session_id, _calibration = build_full_session(tmp_path)
+    catalog.rebuild_catalog(tmp_path)
+    state = AppState(tmp_path)
+    state.set_participant(participant_id)
+
+    screen = ResultsScreen(state)
+    screen.session_list.setCurrentRow(0)
+    screen.summary_combo.setCurrentIndex(0)
+
+    canvases = screen._detail_widget.findChildren(FigureCanvasQTAgg)
+    assert len(canvases) >= 1, "expected at least one rendered figure canvas"
+
+
+@requires_offscreen_qt
 def test_data_screen_constructs(qapp, tmp_path: Path) -> None:
     from vpsych.app.screens.data import DataScreen
 
@@ -95,3 +128,71 @@ def test_card_match_widget_keyboard_resizes(qapp) -> None:
     event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier)
     widget.keyPressEvent(event)
     assert widget.card_width_px == before + 1.0
+
+
+@requires_offscreen_qt
+def test_bisection_widget_keyboard_adjusts_gray_level(qapp) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    from vpsych.app.widgets.bisection_widget import BisectionWidget
+
+    widget = BisectionWidget()
+    widget.set_gray_level(0.5)
+    up_event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier)
+    widget.keyPressEvent(up_event)
+    assert widget.gray_level == pytest.approx(0.505)
+    down_event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier)
+    widget.keyPressEvent(down_event)
+    widget.keyPressEvent(down_event)
+    assert widget.gray_level == pytest.approx(0.495)
+
+
+@requires_offscreen_qt
+def test_gamma_step_psychophysical_flow_recovers_gamma_end_to_end(qapp) -> None:
+    """Drive the whole grade-B UI flow: select psychophysical, confirm every bisection
+    match with a level implied by a known gamma, commit, and build a `GammaCalibration`.
+    """
+    from vpsych.app.screens.calibration_wizard import _GammaStep
+    from vpsych.app.viewmodels.calibration_wizard import CalibrationWizardState
+
+    true_gamma = 2.2
+    state = CalibrationWizardState()
+    step = _GammaStep(state)
+    step.psychophysical_radio.setChecked(True)
+
+    while not step._bisection.is_complete:
+        fraction = step._bisection.current_fraction
+        assert fraction is not None
+        step.bisection_widget.set_gray_level(fraction ** (1.0 / true_gamma))
+        step._on_confirm_bisection_match()
+
+    step.commit()
+    assert state.gamma.mode == "psychophysical"
+    gamma_cal = state.gamma.build()
+    assert gamma_cal.method == "psychophysical"
+    assert gamma_cal.grade == "B"
+    assert gamma_cal.gamma_single == pytest.approx(true_gamma, rel=1e-3)
+
+
+@requires_offscreen_qt
+def test_color_step_manual_entry_commit_builds_grade_a(qapp) -> None:
+    from vpsych.app.screens.calibration_wizard import _ColorStep
+    from vpsych.app.viewmodels.calibration_wizard import CalibrationWizardState
+
+    state = CalibrationWizardState()
+    step = _ColorStep(state)
+    step.measured_radio.setChecked(True)
+    assert step.measured_panel.isHidden() is False
+
+    step._spin_boxes["red"]["x"].setValue(0.68)
+    step._spin_boxes["red"]["y"].setValue(0.32)
+    step._spin_boxes["red"]["Y"].setValue(21.0)
+
+    step.commit()
+    assert state.color.measured is True
+    color_cal = state.color.build()
+    assert color_cal.method == "measured"
+    assert color_cal.grade == "A"
+    assert color_cal.red.x == pytest.approx(0.68)
+    assert color_cal.red.Y_cdm2 == pytest.approx(21.0)
