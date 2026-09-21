@@ -681,7 +681,12 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
             eye=eye,
             run=1,
             estimate=estimate,
-            fit_params={"slope_neg_log10_hz": slope, "lapse_rate": lapse},
+            fit_params={
+                "slope_neg_log10_hz": slope,
+                "lapse_rate": lapse,
+                # Recorded so the reports layer can redraw the curve this test fitted.
+                "guess_rate": GUESS_RATE,
+            },
             gof={},
             quality_flags=quality_flags,
             n_trials=len(non_catch),

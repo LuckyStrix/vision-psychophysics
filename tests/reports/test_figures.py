@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import matplotlib
 import numpy as np
 import pandas as pd
+import pytest
 
 from vpsych.core.calibration.models import (
     Calibration,
@@ -17,8 +18,10 @@ from vpsych.core.calibration.models import (
 )
 from vpsych.core.display import DisplayGeometry
 from vpsych.core.procedures.base import ThresholdEstimate
+from vpsych.core.procedures.questplus_procedure import questplus_weibull_x_at_p
 from vpsych.data.schemas import QualityFlag, TestSummary
 from vpsych.reports.figures import (
+    _questplus_weibull_curve_params,
     csf_figure,
     history_figure,
     psychometric_figure,
@@ -533,4 +536,74 @@ def test_psychometric_figure_draws_a_fit_curve_from_a_real_summary() -> None:
     fig = psychometric_figure(summary, trials)
     ax = fig.axes[0]
     labels = [line.get_label() for line in ax.get_lines()]
-    assert "Fit" in labels, "expected a plotted logistic fit curve from a real summary"
+    assert "Fitted curve (Weibull)" in labels, (
+        "expected the questplus Weibull the test actually fitted to be drawn from a real "
+        "summary -- not a logistic through the reported criterion, which is a different "
+        "family and a different point on the curve"
+    )
+
+    # The curve must be the fitted model, checked against questplus's own Weibull rather
+    # than re-deriving it here from whatever the figure happened to plot.
+    native_threshold, slope, guess, lapse = _questplus_weibull_curve_params(summary)  # type: ignore[misc]
+    fit_line = next(line for line in ax.get_lines() if line.get_label() == "Fitted curve (Weibull)")
+    x_fit, y_fit = fit_line.get_xdata(), fit_line.get_ydata()
+    expected = (
+        1.0
+        - lapse
+        - (1.0 - guess - lapse)
+        * np.exp(-(10.0 ** (slope * (np.asarray(x_fit) - native_threshold))))
+    )
+    assert np.allclose(np.asarray(y_fit), expected)
+
+    # And the threshold marker must sit in intensity units (the x-axis), not in the
+    # test's output units: vernier reports arcsec over a log10(arcsec) axis and CFF
+    # reports Hz over a -log10(Hz) axis, so plotting estimate.value directly puts the
+    # line far off the data.
+    dashed = [line.get_xdata()[0] for line in ax.get_lines() if line.get_linestyle() == "--"]
+    assert len(dashed) == 1
+    expected_x = questplus_weibull_x_at_p(
+        native_threshold,
+        slope,
+        guess,
+        lapse,
+        float(summary.estimate.extra["target_p_correct"]),
+    )
+    assert dashed[0] == pytest.approx(expected_x)
+
+
+def test_psychometric_figure_threshold_marker_is_in_intensity_units() -> None:
+    """The threshold line must sit on the intensity axis, not at the reported value.
+
+    `critical_flicker_fusion` reports Hz but its trials are in `x = -log10(Hz)`, so
+    plotting `estimate.value` directly would put the marker tens of units off the data.
+    `visual_acuity` (above) cannot catch this: its output units *are* its intensity units.
+    """
+    import sys
+
+    if "tests" not in sys.path:
+        sys.path.insert(0, "tests")
+    import tests_catalog.test_critical_flicker_fusion as cff_tests  # type: ignore[import-not-found]
+    from vpsych.tests_catalog.critical_flicker_fusion import CFFParams
+    from vpsych.tests_catalog.critical_flicker_fusion import (
+        CriticalFlickerFusionTest as CFFTest,
+    )
+
+    test = CFFTest(
+        params=CFFParams(max_trials=40),
+        display=cff_tests._display(),
+        calibration=cff_tests._calibration(),
+        rng=np.random.default_rng(0),
+    )
+    trials = cff_tests._trials_fixture(test)
+    summary = test.summarize(trials)
+    if summary.estimate.extra.get("display_limited"):
+        pytest.skip("fixture landed in the display-limited regime; no point estimate to mark")
+
+    ax = psychometric_figure(summary, trials).axes[0]
+    dashed = [line.get_xdata()[0] for line in ax.get_lines() if line.get_linestyle() == "--"]
+    assert len(dashed) == 1
+    # The marker is the reported Hz expressed on the -log10(Hz) axis...
+    assert dashed[0] == pytest.approx(-np.log10(summary.estimate.value))
+    # ...which is nowhere near the raw Hz value, and inside the tested range.
+    assert abs(dashed[0] - summary.estimate.value) > 1.0
+    assert trials["intensity"].min() <= dashed[0] <= trials["intensity"].max()

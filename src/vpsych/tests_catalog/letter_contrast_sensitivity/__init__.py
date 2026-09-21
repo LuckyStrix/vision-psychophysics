@@ -404,6 +404,8 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
             fit_params={
                 "slope_log10_contrast": raw_estimate.extra.get("slope"),
                 "lapse_rate": raw_estimate.extra.get("lapse_rate"),
+                # Recorded so the reports layer can redraw the curve this test fitted.
+                "guess_rate": GUESS_RATE,
             },
             gof={},
             quality_flags=quality_flags,

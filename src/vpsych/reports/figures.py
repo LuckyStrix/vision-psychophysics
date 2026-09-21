@@ -11,6 +11,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 
+from vpsych.core.procedures.questplus_procedure import questplus_weibull_x_at_p
 from vpsych.data.schemas import TestSummary
 
 # Colorblind-safe palette (Okabe-Ito): suitable for most types of color blindness
@@ -51,6 +52,54 @@ def _find_slope_param(fit_params: dict) -> float | None:
         if key.lower().startswith("slope") and isinstance(value, (int, float)):
             return float(value)
     return None
+
+
+def _questplus_weibull_curve_params(
+    summary: TestSummary,
+) -> tuple[float, float, float, float] | None:
+    """Recover (native_threshold, slope, guess_rate, lapse_rate) for the fitted curve.
+
+    Every QUEST+-driven test in `tests_catalog` fits `questplus`'s own Weibull, whose
+    threshold parameter sits at a different point than the criterion reported in
+    `summary.estimate.value` (see `vpsych.core.procedures.questplus_procedure` and
+    docs/METHODS.md, "Criterion conversion pitfall"). Reconstructing the curve therefore
+    needs the *native* threshold, which those tests record in `estimate.extra` under a
+    `"raw_questplus_native_threshold*"` key, plus the fitted slope/guess/lapse.
+
+    Args:
+        summary: The summary to read parameters from.
+
+    Returns:
+        The four parameters, or `None` when this summary does not record enough to draw
+        the curve it actually fitted -- in which case no curve should be drawn at all.
+    """
+    extra = summary.estimate.extra or {}
+    fit_params = summary.fit_params or {}
+
+    native_threshold: float | None = None
+    for key, value in extra.items():
+        if key.startswith("raw_questplus_native_threshold") and isinstance(value, (int, float)):
+            native_threshold = float(value)
+            break
+
+    slope = _find_slope_param(fit_params)
+    if slope is None:
+        slope = _find_slope_param(extra)
+
+    def _lookup(*names: str) -> float | None:
+        for source in (fit_params, extra):
+            for name in names:
+                value = source.get(name)
+                if isinstance(value, (int, float)):
+                    return float(value)
+        return None
+
+    guess = _lookup("guess_rate", "guess")
+    lapse = _lookup("lapse_rate", "lapse")
+
+    if native_threshold is None or slope is None or guess is None or lapse is None:
+        return None
+    return native_threshold, slope, guess, lapse
 
 
 def psychometric_figure(summary: TestSummary, trials: pd.DataFrame) -> Figure:
@@ -132,42 +181,87 @@ def psychometric_figure(summary: TestSummary, trials: pd.DataFrame) -> Figure:
         # draw a smooth curve across the range
         x_range = np.linspace(intensities.min(), intensities.max(), 100)
 
-        # Try to fit a simple logistic if we have classic params. No real test in
-        # tests_catalog writes a "threshold"/"slope" pair under exactly those names (each
-        # names its slope after its own intensity units, e.g. "slope_log10_contrast",
-        # "slope_neg_log10_hz") -- an earlier version of this function only recognized the
-        # literal keys "threshold"/"slope"/"lapse"/"guess", which matched hand-built test
-        # fixtures but never a real summarize() output, so no real session ever drew a fit
-        # curve. The threshold instead always comes from `summary.estimate.value` (already
-        # used below for the annotation, and always in the same units as `intensity`), and
-        # the slope from any fit_params key starting with "slope".
-        threshold = summary.estimate.value
-        slope = _find_slope_param(summary.fit_params)
-        if threshold is not None and slope is not None:
-            lapse = float(
-                summary.fit_params.get("lapse_rate", summary.fit_params.get("lapse", 0.02))
+        # Draw the curve the test ACTUALLY fitted, or none at all.
+        #
+        # Two earlier versions of this function got this wrong in ways only real data
+        # exposed. The first recognized only the literal keys "threshold"/"slope"/"lapse"/
+        # "guess", which no real test writes, so no real session ever drew a curve. The
+        # second drew a *logistic* through `summary.estimate.value` using whatever
+        # "slope*" key it found -- but every QUEST+-driven test here fits questplus's own
+        # Weibull, and its slope is that family's shape exponent, not a logistic slope.
+        # Feeding one family's parameter to the other draws a curve that matches neither
+        # the model nor the data (the same criterion/parameterization confusion documented
+        # in docs/METHODS.md, "Criterion conversion pitfall").
+        #
+        # `summary.estimate.value` is also the *converted* criterion (e.g. the 75%-correct
+        # point), not the curve's own threshold parameter, so it cannot anchor the curve
+        # either. The tests that record enough to reconstruct their fit store the native
+        # threshold in `estimate.extra` under a "raw_questplus_native_threshold*" key.
+        curve = _questplus_weibull_curve_params(summary)
+        if curve is not None:
+            native_threshold, slope, guess, lapse = curve
+            y_fit = (
+                1.0
+                - lapse
+                - (1.0 - guess - lapse) * np.exp(-(10.0 ** (slope * (x_range - native_threshold))))
             )
-            guess = float(
-                summary.fit_params.get("guess_rate", summary.fit_params.get("guess", 0.5))
+            ax.plot(
+                x_range,
+                y_fit,
+                "-",
+                color=_PALETTE["sky_blue"],
+                linewidth=2,
+                label="Fitted curve (Weibull)",
             )
-
-            # Logistic: y = guess + (1 - guess - lapse) * inv_logit((x - threshold) * slope)
-            inv_logit = 1.0 / (1.0 + np.exp(-slope * (x_range - threshold)))
-            y_fit = guess + (1 - guess - lapse) * inv_logit
-            ax.plot(x_range, y_fit, "-", color=_PALETTE["sky_blue"], linewidth=2, label="Fit")
-
-        # Plot threshold with CI
-        if summary.estimate.value is not None:
-            threshold_val = summary.estimate.value
-            ci_low = summary.estimate.ci_low
-            ci_high = summary.estimate.ci_high
-
-            ax.axvline(threshold_val, color=_PALETTE["orange"], linestyle="--", linewidth=2)
-            ax.fill_betweenx([0, 1], ci_low, ci_high, alpha=0.2, color=_PALETTE["orange"])
+        else:
             ax.text(
-                threshold_val,
+                0.02,
+                0.02,
+                "Fitted curve not shown:\nmodel parameters not recorded for this test",
+                transform=ax.transAxes,
+                fontsize=8,
+                va="bottom",
+                ha="left",
+                bbox={"boxstyle": "round", "facecolor": "lightgray", "alpha": 0.6},
+            )
+
+        # Mark the threshold -- but only where it can be placed on THIS axis.
+        #
+        # `summary.estimate.value` is reported in the test's output units, which are often
+        # not the trial intensity units this axis is drawn in: vernier_acuity reports
+        # arcsec over a log10(arcsec) axis, critical_flicker_fusion reports Hz over a
+        # -log10(Hz) axis. Drawing the raw value as a vertical line put the marker in a
+        # completely wrong place for those tests, so place it by converting the criterion
+        # into intensity units from the fitted curve, and otherwise fall back to the raw
+        # value only when the trials confirm the units match.
+        trial_units = (
+            str(main_trials["intensity_units"].iloc[0])
+            if "intensity_units" in main_trials.columns and len(main_trials)
+            else None
+        )
+        target_p = summary.estimate.extra.get("target_p_correct")
+        threshold_x: float | None = None
+        ci_span: tuple[float, float] | None = None
+        if curve is not None and isinstance(target_p, (int, float)):
+            native_threshold, slope, guess, lapse = curve
+            threshold_x = questplus_weibull_x_at_p(
+                native_threshold, slope, guess, lapse, float(target_p)
+            )
+        elif trial_units is not None and trial_units == summary.estimate.units:
+            threshold_x = summary.estimate.value
+            ci_span = (summary.estimate.ci_low, summary.estimate.ci_high)
+
+        if threshold_x is not None:
+            ax.axvline(threshold_x, color=_PALETTE["orange"], linestyle="--", linewidth=2)
+            if ci_span is not None:
+                ax.fill_betweenx(
+                    [0, 1], ci_span[0], ci_span[1], alpha=0.2, color=_PALETTE["orange"]
+                )
+            ax.text(
+                threshold_x,
                 0.95,
-                f"Threshold: {threshold_val:.2f}\n[{ci_low:.2f}, {ci_high:.2f}]",
+                f"Threshold: {summary.estimate.value:.3g} {summary.estimate.units}\n"
+                f"[{summary.estimate.ci_low:.3g}, {summary.estimate.ci_high:.3g}]",
                 ha="center",
                 va="top",
                 fontsize=9,

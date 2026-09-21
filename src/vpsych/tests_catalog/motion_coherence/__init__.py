@@ -454,7 +454,12 @@ class MotionCoherenceTest(PsychophysicalTest):
             eye=eye,
             run=1,
             estimate=estimate,
-            fit_params={"slope_log10_coherence": slope, "lapse_rate": lapse},
+            fit_params={
+                "slope_log10_coherence": slope,
+                "lapse_rate": lapse,
+                # Recorded so the reports layer can redraw the curve this test fitted.
+                "guess_rate": GUESS_RATE,
+            },
             gof={},
             quality_flags=quality_flags,
             n_trials=len(non_catch),

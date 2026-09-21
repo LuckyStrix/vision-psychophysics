@@ -533,6 +533,9 @@ class VernierAcuityTest(PsychophysicalTest):
                     "extra": {
                         **raw_estimate.extra,
                         "raw_log10_threshold": raw_estimate.value,
+                        # Same value under the shared name the reports layer looks for
+                        # when redrawing this test's fitted curve.
+                        "raw_questplus_native_threshold_log10_arcsec": raw_estimate.value,
                         "reported_log10_threshold": reported_log_offset,
                         "target_p_correct": target_p,
                     },
