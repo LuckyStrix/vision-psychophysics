@@ -2,18 +2,24 @@
 
 The app is the calm, clinical, keyboard-navigable UI described in the
 project plan (home / calibration wizard / test catalog / session builder /
-pre-test briefing / run / results / data). It never draws stimuli itself --
-running a session hands off to `vpsych.runner` in a subprocess (see
-`vpsych.runner.__main__`) so Qt's event loop never competes with
+run / results / data). It never draws stimuli itself -- running a session
+hands off to `vpsych.runner` in a subprocess (see
+`vpsych.app.runner_process`) so Qt's event loop never competes with
 frame-locked stimulus presentation, and watches that subprocess's
 `vpsych.runner.status.RunnerStatus` file for progress.
-
-Not implemented in Phase 0 -- this module freezes the entry point; `main`
-raises `NotImplementedError` until a later phase implements the actual
-Qt application (see the plan's Phase 3).
 """
 
 from __future__ import annotations
+
+import sys
+import tempfile
+from pathlib import Path
+
+from PySide6.QtWidgets import QApplication
+
+from vpsych.app import theme
+from vpsych.app.main_window import MainWindow
+from vpsych.app.state import AppState
 
 
 def main() -> int:
@@ -22,10 +28,21 @@ def main() -> int:
     Returns:
         Process exit code.
     """
-    raise NotImplementedError(
-        "vpsych.app.main.main is a Phase-0 interface stub; the PySide6 app "
-        "lands in a later phase (see the plan's Phase 3)."
-    )
+    app = QApplication(sys.argv)
+    app.setApplicationName("vpsych")
+    app.setStyleSheet(theme.STYLESHEET)
+
+    state = AppState()
+    # Session-plan and runner-status files are a transient hand-off to the
+    # runner subprocess, not participant data -- kept outside the data root
+    # entirely so they never show up as stray files in a dataset scan.
+    run_scratch_dir = Path(tempfile.gettempdir()) / "vpsych-app-runs"
+
+    window = MainWindow(state, run_scratch_dir)
+    window.resize(1100, 720)
+    window.show()
+
+    return app.exec()
 
 
 if __name__ == "__main__":
