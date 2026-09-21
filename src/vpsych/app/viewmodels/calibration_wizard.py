@@ -131,6 +131,97 @@ class GeometryStepState:
         )
 
 
+#: Default target luminance fractions for the psychophysical bisection task (grade B).
+#: Five levels spanning the mid-range, avoiding 0/1 themselves (the underlying
+#: `estimate_gamma_psychophysical` requires both `p` and the matched drive level to be
+#: strictly inside (0, 1)); enough points to give `estimate_gamma_psychophysical`'s CI some
+#: real degrees of freedom (`n - 1`) without making the task tediously long.
+DEFAULT_BISECTION_FRACTIONS: tuple[float, ...] = (0.2, 0.35, 0.5, 0.65, 0.8)
+
+#: Number of drive levels sampled by the guided photometer gamma measurement (fewer than
+#: `measure_gamma`'s own default of 17, to keep the guided in-wizard sequence -- each level
+#: needs a physical instrument placement/reading -- reasonably short).
+DEFAULT_PHOTOMETER_GAMMA_LEVELS = 9
+
+
+@dataclass
+class BisectionSequenceState:
+    """Pure state for the psychophysical (no-photometer) gamma bisection task.
+
+    Steps the observer through `fractions` one at a time: for each target
+    fraction `p`, the observer keyboard-adjusts a uniform gray patch
+    (`current_level`) until it looks equally bright as a fine dithered
+    checkerboard with a fraction `p` of pixels at maximum -- see
+    `vpsych.core.calibration.gamma.estimate_gamma_psychophysical` for the
+    linear-pooling argument this relies on. `confirm_match` records the
+    match and advances to the next fraction; once every fraction has been
+    matched, `result()` fits gamma (with a CI) from the recorded matches.
+
+    Attributes:
+        fractions: Target luminance fractions to present, in order.
+        index: Index into `fractions` of the fraction currently being
+            matched (`len(fractions)` once complete).
+        current_level: The adjustable gray patch's current drive level,
+            in `(0, 1)` (clamped away from the exact endpoints, which
+            `estimate_gamma_psychophysical` rejects).
+        matches: `(target_fraction, matched_drive_level)` pairs recorded
+            so far, oldest first.
+    """
+
+    fractions: tuple[float, ...] = DEFAULT_BISECTION_FRACTIONS
+    index: int = 0
+    current_level: float = 0.5
+    matches: list[tuple[float, float]] = field(default_factory=list)
+
+    @property
+    def current_fraction(self) -> float | None:
+        """The target fraction currently being matched, or `None` once complete."""
+        if self.index >= len(self.fractions):
+            return None
+        return self.fractions[self.index]
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether every fraction in `fractions` has been matched."""
+        return self.index >= len(self.fractions)
+
+    @property
+    def progress_text(self) -> str:
+        """A human-readable ``"level i of n"`` progress string."""
+        if self.is_complete:
+            return f"All {len(self.fractions)} levels matched."
+        return f"Level {self.index + 1} of {len(self.fractions)}."
+
+    def adjust(self, delta: float) -> None:
+        """Adjust `current_level` by `delta`, clamped to a valid open sub-interval of (0, 1)."""
+        self.current_level = min(0.995, max(0.005, self.current_level + delta))
+
+    def confirm_match(self) -> None:
+        """Record `(current_fraction, current_level)` and advance to the next fraction.
+
+        Raises:
+            WizardStepError: If the sequence is already complete.
+        """
+        fraction = self.current_fraction
+        if fraction is None:
+            raise WizardStepError("Bisection sequence is already complete.")
+        self.matches.append((fraction, self.current_level))
+        self.index += 1
+        self.current_level = 0.5
+
+    def result(self) -> GammaPsychophysicalEstimate:
+        """Fit gamma (with a CI) from the matches recorded so far.
+
+        Raises:
+            WizardStepError: If fewer than 2 matches have been recorded.
+        """
+        if len(self.matches) < 2:
+            raise WizardStepError(
+                f"Need at least 2 bisection matches to estimate gamma (have {len(self.matches)})."
+            )
+        return estimate_gamma_psychophysical(self.matches)
+
+
 GammaMode = str  # "photometer" | "psychophysical" | "none"
 
 

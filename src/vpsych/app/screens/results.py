@@ -12,6 +12,8 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
@@ -92,6 +94,7 @@ class ResultsScreen(QWidget):
 
         self._state.participant_changed.connect(lambda _pid: self.refresh())
         self._summaries: list[TestSummary] = []
+        self._current_session_id: str | None = None
         self.refresh()
 
     def refresh(self) -> None:
@@ -117,8 +120,10 @@ class ResultsScreen(QWidget):
         self.summary_combo.clear()
         self._clear_details()
         if current is None or not self._state.participant_id:
+            self._current_session_id = None
             return
         session_id = current.data(0x0100)
+        self._current_session_id = session_id
         self._summaries = list_summaries_for_session(
             self._state.participant_id, session_id, self._state.data_root
         )
@@ -193,20 +198,51 @@ class ResultsScreen(QWidget):
             self._detail_layout.addWidget(placeholder)
             return
         try:
-            builder = None
-            if hasattr(figures_module, "psychometric_figure"):
-                builder = figures_module.psychometric_figure
-            elif hasattr(figures_module, "csf_figure"):
-                builder = figures_module.csf_figure
-            if builder is None:
-                raise AttributeError("no figure builder found in vpsych.reports.figures")
-            builder(summary)
-            placeholder = QLabel("Figure generated (rendering to the canvas is not yet wired up).")
+            figure = self._build_figure(figures_module, summary)
         except Exception as exc:
             placeholder = QLabel(f"Could not render figure: {exc}")
-        placeholder.setWordWrap(True)
-        placeholder.setProperty("role", "caption")
-        self._detail_layout.addWidget(placeholder)
+            placeholder.setWordWrap(True)
+            placeholder.setProperty("role", "caption")
+            self._detail_layout.addWidget(placeholder)
+            return
+        canvas = FigureCanvasQTAgg(figure)
+        canvas.setMinimumHeight(380)
+        self._detail_layout.addWidget(canvas)
+
+    def _build_figure(self, figures_module: Any, summary: TestSummary) -> Figure:
+        """Pick and call the right `vpsych.reports.figures` builder for `summary`.
+
+        A CSF-style summary carries its curve under `estimate.extra` (see
+        `csf_figure`'s docstring); anything else is plotted as an ordinary
+        psychometric function, which needs the run's own trials (loaded
+        from disk, not just the summary).
+        """
+        extra = summary.estimate.extra or {}
+        if "csf_curve" in extra or "spatial_frequency_cpd" in extra:
+            figure = figures_module.csf_figure(summary)
+        else:
+            trials = self._load_trials(summary)
+            figure = figures_module.psychometric_figure(summary, trials)
+        return figure  # type: ignore[no-any-return]
+
+    def _load_trials(self, summary: TestSummary) -> Any:
+        from vpsych.data.paths import trials_tsv_path
+        from vpsych.data.tsv import read_trials_tsv
+
+        pid = self._state.participant_id
+        if not pid or not self._current_session_id:
+            import pandas as pd
+
+            return pd.DataFrame()
+        path = trials_tsv_path(
+            pid,
+            self._current_session_id,
+            summary.task_id,
+            summary.eye,
+            summary.run,
+            self._state.data_root,
+        )
+        return read_trials_tsv(path)
 
     def _render_history(self, summary: TestSummary) -> None:
         history_title = QLabel(f"History: {summary.task_id} ({summary.eye})")
@@ -219,6 +255,23 @@ class ResultsScreen(QWidget):
         if not history:
             self._detail_layout.addWidget(QLabel("No prior runs of this test on record."))
             return
+
+        figures_module = _import_reports_figures()
+        if figures_module is not None:
+            try:
+                figure = figures_module.history_figure(
+                    history, summary.task_id, summary.estimate.units
+                )
+                canvas = FigureCanvasQTAgg(figure)
+                canvas.setMinimumHeight(320)
+                self._detail_layout.addWidget(canvas)
+                return
+            except Exception as exc:
+                error_label = QLabel(f"Could not render history figure: {exc}")
+                error_label.setWordWrap(True)
+                error_label.setProperty("role", "caption")
+                self._detail_layout.addWidget(error_label)
+
         for row in history:
             text = (
                 f"{row['started_utc']}: {row['value']:.3g} {row['units']} "
