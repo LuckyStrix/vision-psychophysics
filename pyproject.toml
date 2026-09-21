@@ -36,6 +36,7 @@ Repository = "https://github.com/LuckyStrix/vision-psychophysics"
 vpsych = "vpsych.app.main:main"
 vpsych-run = "vpsych.runner.__main__:main"
 vpsych-data = "vpsych.data.cli:main"
+vpsych-report = "vpsych.reports.cli:main"
 
 # NOTE: psychopy, psychtoolbox and PySide6 installed cleanly as ordinary
 # dependencies when this project was scaffolded on Linux / Python 3.10, so no

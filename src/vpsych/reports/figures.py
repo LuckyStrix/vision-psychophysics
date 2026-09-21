@@ -1,0 +1,338 @@
+"""Figure-generation functions for session and longitudinal reports.
+
+Produces matplotlib figures suitable for HTML embedding, designed to be
+colorblind-safe, grayscale-legible, and readable at 800px width.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
+
+from vpsych.data.schemas import TestSummary
+
+# Colorblind-safe palette (Okabe-Ito): suitable for most types of color blindness
+# and legible in grayscale.
+_PALETTE = {
+    "black": "#000000",
+    "orange": "#E69F00",
+    "sky_blue": "#56B4E9",
+    "bluish_green": "#009E73",
+    "yellow": "#F0E442",
+    "blue": "#0072B2",
+    "vermillion": "#D55E00",
+    "reddish_purple": "#CC79A7",
+}
+
+# Map eye identifiers to descriptive labels and distinct palette colors
+_EYE_COLORS = {
+    "OD": (_PALETTE["blue"], "Right (OD)"),
+    "OS": (_PALETTE["orange"], "Left (OS)"),
+    "OU": (_PALETTE["black"], "Both (OU)"),
+}
+
+
+def psychometric_figure(summary: TestSummary, trials: pd.DataFrame) -> Figure:
+    """Plot observed proportion-correct binned by intensity, fitted curve, and threshold.
+
+    Binned points have size proportional to trial count. Practice and catch trials
+    are excluded. If no fit params are available, marks the known range with a
+    "lower bound" annotation instead.
+
+    Args:
+        summary: The TestSummary containing fit params and threshold estimate.
+        trials: DataFrame with one row per trial (e.g., from read_trials_tsv).
+            Must have columns: `intensity`, `correct`, `block`, `is_catch`.
+
+    Returns:
+        A matplotlib Figure with axes labeled with real units from summary.estimate.units.
+    """
+    matplotlib_use_agg()
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Filter to main block, exclude catch trials
+    if len(trials) == 0 or "block" not in trials.columns or "is_catch" not in trials.columns:
+        main_trials = pd.DataFrame()
+    else:
+        main_trials = trials[(trials["block"] == "main") & ~trials["is_catch"]].copy()
+
+    if len(main_trials) == 0:
+        ax.text(
+            0.5,
+            0.5,
+            "No main-block trials available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_xlabel(f"Intensity ({summary.estimate.units})")
+        ax.set_ylabel("Proportion Correct")
+        ax.set_title(f"{summary.task_id}: Psychometric Function")
+        return fig
+
+    # Bin by intensity and compute proportion correct
+    intensity_groups = main_trials.groupby("intensity")
+    intensities_list: list[float] = []
+    proportions_list: list[float] = []
+    trial_counts_list: list[int] = []
+
+    for intensity, group in intensity_groups:
+        intensities_list.append(float(intensity))  # type: ignore[arg-type]
+        n_trials = len(group)
+        n_correct = int(group["correct"].sum())
+        proportions_list.append(n_correct / n_trials)
+        trial_counts_list.append(n_trials)
+
+    intensities = np.array(intensities_list, dtype=float)
+    proportions = np.array(proportions_list, dtype=float)
+    trial_counts = np.array(trial_counts_list, dtype=int)
+
+    # Sort by intensity
+    sort_idx = np.argsort(intensities)
+    intensities = intensities[sort_idx]
+    proportions = proportions[sort_idx]
+    trial_counts = trial_counts[sort_idx]
+
+    # Plot binned points (size proportional to trial count)
+    sizes = np.clip(trial_counts * 10, 20, 200)
+    ax.scatter(
+        intensities,
+        proportions,
+        s=sizes,
+        alpha=0.6,
+        color=_PALETTE["blue"],
+        edgecolors="black",
+        linewidth=0.5,
+    )
+
+    # Plot fitted curve if available
+    if summary.fit_params:
+        # For simple psychometric fits (threshold-slope-lapse style),
+        # draw a smooth curve across the range
+        x_range = np.linspace(intensities.min(), intensities.max(), 100)
+
+        # Try to fit a simple logistic if we have classic params
+        if "threshold" in summary.fit_params and "slope" in summary.fit_params:
+            threshold = summary.fit_params["threshold"]
+            slope = summary.fit_params["slope"]
+            lapse = summary.fit_params.get("lapse", 0.02)
+            guess = summary.fit_params.get("guess", 0.5)
+
+            # Logistic: y = guess + (1 - guess - lapse) * inv_logit((x - threshold) * slope)
+            inv_logit = 1.0 / (1.0 + np.exp(-slope * (x_range - threshold)))
+            y_fit = guess + (1 - guess - lapse) * inv_logit
+            ax.plot(x_range, y_fit, "-", color=_PALETTE["sky_blue"], linewidth=2, label="Fit")
+
+        # Plot threshold with CI
+        if summary.estimate.value is not None:
+            threshold_val = summary.estimate.value
+            ci_low = summary.estimate.ci_low
+            ci_high = summary.estimate.ci_high
+
+            ax.axvline(threshold_val, color=_PALETTE["orange"], linestyle="--", linewidth=2)
+            ax.fill_betweenx([0, 1], ci_low, ci_high, alpha=0.2, color=_PALETTE["orange"])
+            ax.text(
+                threshold_val,
+                0.95,
+                f"Threshold: {threshold_val:.2f}\n[{ci_low:.2f}, {ci_high:.2f}]",
+                ha="center",
+                va="top",
+                fontsize=9,
+                bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.5},
+            )
+    else:
+        # No fit params: mark tested range as lower bound
+        tested_min = intensities.min()
+        tested_max = intensities.max()
+        ax.fill_betweenx([0, 1], tested_min, tested_max, alpha=0.1, color="#888888")
+        ax.text(
+            (tested_min + tested_max) / 2,
+            0.5,
+            "Lower bound\n(no fit available)",
+            ha="center",
+            va="center",
+            fontsize=10,
+            bbox={"boxstyle": "round", "facecolor": "lightgray", "alpha": 0.7},
+        )
+
+    ax.set_xlabel(f"Intensity ({summary.estimate.units})")
+    ax.set_ylabel("Proportion Correct")
+    ax.set_title(f"{summary.task_id}: Psychometric Function")
+    ax.set_ylim(-0.05, 1.05)
+    ax.grid(True, alpha=0.3)
+    if "Fit" in [line.get_label() for line in ax.get_lines()]:
+        ax.legend()
+
+    return fig
+
+
+def csf_figure(summary: TestSummary) -> Figure:
+    """Plot log contrast sensitivity vs. spatial frequency with credible band.
+
+    Uses the CSF parameters from summary.estimate.extra (set by the qCSF test's
+    csf_curve method). Marks the tested frequency range, includes AULCSF in title.
+
+    Args:
+        summary: A TestSummary from the contrast_sensitivity_function test,
+            with extra containing csf_curve output.
+
+    Returns:
+        A matplotlib Figure showing the CSF curve with credible band.
+    """
+    matplotlib_use_agg()
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Extract CSF curve data from extra
+    extra = summary.estimate.extra
+    if not extra or "spatial_frequency_cpd" not in extra:
+        ax.text(
+            0.5,
+            0.5,
+            "No CSF curve data available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_xlabel("Spatial Frequency (cpd)")
+        ax.set_ylabel("Log10 Contrast Sensitivity")
+        ax.set_title(f"{summary.task_id}: Contrast Sensitivity Function")
+        return fig
+
+    freqs = np.array(extra["spatial_frequency_cpd"])
+    mean_cs = np.array(extra["log10_cs_mean"])
+    ci_low = np.array(extra["log10_cs_ci_low"])
+    ci_high = np.array(extra["log10_cs_ci_high"])
+
+    # Plot credible band
+    ax.fill_between(freqs, ci_low, ci_high, alpha=0.3, color=_PALETTE["sky_blue"], label="95% CI")
+
+    # Plot mean curve
+    ax.plot(freqs, mean_cs, "-", color=_PALETTE["blue"], linewidth=2, label="Mean")
+
+    # Shade tested frequency range
+    if hasattr(summary, "fit_params") and summary.fit_params:
+        freq_range_info = summary.fit_params.get("freq_range_tested", {})
+        if freq_range_info:
+            freq_min = freq_range_info.get("min_cpd")
+            freq_max = freq_range_info.get("max_cpd")
+            if freq_min is not None and freq_max is not None:
+                ax.axvspan(freq_min, freq_max, alpha=0.1, color=_PALETTE["orange"])
+
+    ax.set_xscale("log")
+    ax.set_xlabel("Spatial Frequency (cpd)")
+    ax.set_ylabel("Log10 Contrast Sensitivity")
+
+    # Include AULCSF in title if available
+    title = f"{summary.task_id}: Contrast Sensitivity Function"
+    if "aulcsf" in extra:
+        aulcsf = extra["aulcsf"]
+        title += f" (AULCSF={aulcsf:.2f})"
+
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3, which="both")
+    ax.legend()
+
+    return fig
+
+
+def history_figure(history: list[dict], task_id: str, units: str) -> Figure:
+    """Plot threshold over time with per-session CI error bars, one series per eye.
+
+    Chronological x-axis (oldest to newest). Each point represents one session/run.
+
+    Args:
+        history: List of dicts from catalog.task_history(), one per test run,
+            ordered oldest-first. Each dict has keys: `session_id`, `run`,
+            `value`, `ci_low`, `ci_high`, `ci_level`, `units`, `started_utc`, etc.
+        task_id: The test's task ID for the plot title.
+        units: Units string for the y-axis label.
+
+    Returns:
+        A matplotlib Figure showing threshold history over time.
+    """
+    matplotlib_use_agg()
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    if not history:
+        ax.text(
+            0.5,
+            0.5,
+            "No history available",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_xlabel("Date")
+        ax.set_ylabel(f"Threshold ({units})")
+        ax.set_title(f"{task_id}: Threshold History")
+        return fig
+
+    # Convert to DataFrame for easier manipulation
+    history_df = pd.DataFrame(history)
+    if "started_utc" in history_df.columns:
+        history_df["started_utc"] = pd.to_datetime(history_df["started_utc"])
+
+    # Group by eye
+    eyes_in_data: list[str] = (
+        list(history_df["eye"].unique()) if "eye" in history_df.columns else ["OU"]
+    )
+
+    for eye in eyes_in_data:
+        if "eye" in history_df.columns:
+            eye_data = history_df[history_df["eye"] == eye].sort_values(
+                "started_utc", na_position="last"
+            )
+        else:
+            eye_data = history_df.sort_values("started_utc", na_position="last")
+
+        if len(eye_data) == 0:
+            continue
+
+        x = np.arange(len(eye_data))
+        y = np.array(eye_data["value"].values, dtype=float)
+        y_err_low = np.clip(y - np.array(eye_data["ci_low"].values, dtype=float), 0, None)
+        y_err_high = np.clip(np.array(eye_data["ci_high"].values, dtype=float) - y, 0, None)
+
+        color, eye_label = _EYE_COLORS.get(eye, (_PALETTE["black"], eye))
+
+        ax.errorbar(
+            x,
+            y,
+            yerr=[y_err_low, y_err_high],
+            fmt="o-",
+            capsize=5,
+            capthick=1,
+            label=eye_label,
+            color=color,
+            markersize=6,
+        )
+
+    ax.set_xlabel("Session (chronological)")
+    ax.set_ylabel(f"Threshold ({units})")
+    ax.set_title(f"{task_id}: Threshold History")
+    ax.grid(True, alpha=0.3)
+    if len(eyes_in_data) > 1:
+        ax.legend()
+
+    return fig
+
+
+def quality_badges(summary: TestSummary) -> list[tuple[str, str, str]]:
+    """Extract quality flags as (code, severity, message) tuples.
+
+    Args:
+        summary: The TestSummary to extract quality flags from.
+
+    Returns:
+        A list of (code, severity, message) tuples, one per quality flag.
+    """
+    return [(f.code, f.severity, f.message) for f in summary.quality_flags]
+
+
+def matplotlib_use_agg() -> None:
+    """Ensure matplotlib uses the Agg backend (headless, no X11)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
