@@ -137,7 +137,9 @@ def _import_nominal(
     size = nominal.get("result", {}).get("physical_size_mm")
     width_cm = height_cm = None
     if not (isinstance(size, (list, tuple)) and len(size) == 2):
-        rejected.append(f"{record_id}: missing result.physical_size_mm -- screen size not imported.")
+        rejected.append(
+            f"{record_id}: missing result.physical_size_mm -- screen size not imported."
+        )
     else:
         width_cm, height_cm = size[0] / 10.0, size[1] / 10.0
 
@@ -267,7 +269,9 @@ def _build_gamma(
             lum_max_cdm2=lum_max,
         )
     except ValueError as exc:
-        rejected.append(f"{record_id}: gamma fields failed validation ({exc}) -- gamma NOT imported.")
+        rejected.append(
+            f"{record_id}: gamma fields failed validation ({exc}) -- gamma NOT imported."
+        )
         return None
 
 
@@ -323,7 +327,9 @@ def import_calsuite_records(
         CalsuiteImportError: If neither `nominal` nor `measurement` is given.
     """
     if nominal is None and measurement is None:
-        raise CalsuiteImportError("At least one of a display.nominal or display.measurement record is required.")
+        raise CalsuiteImportError(
+            "At least one of a display.nominal or display.measurement record is required."
+        )
 
     rejected: list[str] = []
     warnings: list[str] = []
@@ -332,7 +338,9 @@ def import_calsuite_records(
     width_cm = height_cm = None
     nominal_created: datetime | None = None
     if nominal is not None:
-        width_cm, height_cm, nominal_created = _import_nominal(nominal, rejected=rejected, notes=notes)
+        width_cm, height_cm, nominal_created = _import_nominal(
+            nominal, rejected=rejected, notes=notes
+        )
 
     gamma = color = None
     measurement_created: datetime | None = None

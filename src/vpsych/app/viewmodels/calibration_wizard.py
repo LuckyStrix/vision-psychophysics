@@ -461,7 +461,9 @@ def environment_checklist_warnings(checklist: EnvironmentChecklist | None) -> li
     return warnings
 
 
-def apply_calsuite_import(wizard_state: CalibrationWizardState, result: CalsuiteImportResult) -> None:
+def apply_calsuite_import(
+    wizard_state: CalibrationWizardState, result: CalsuiteImportResult
+) -> None:
     """Apply a calsuite import's results into wizard state, in place.
 
     Only touches fields the import actually produced -- resolution, refresh

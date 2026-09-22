@@ -108,7 +108,12 @@ def test_import_calsuite_button_prefills_geometry_gamma_color(
     screen._environment_step.night_light_check.setChecked(True)
     screen._environment_step.hdr_check.setChecked(True)
 
-    for step in (screen._geometry_step, screen._gamma_step, screen._color_step, screen._environment_step):
+    for step in (
+        screen._geometry_step,
+        screen._gamma_step,
+        screen._color_step,
+        screen._environment_step,
+    ):
         step.commit()
 
     calibration = screen._wizard_state.build_calibration(software_version="0.1.0")

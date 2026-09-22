@@ -55,7 +55,10 @@ def make_measurement(**overrides) -> dict:
         "provenance": "measured",
         "status": "ok",
         "refusals": [],
-        "method": {"name": "calsuite.display.commands", "params": {"backend": "argyll", "steps": 5}},
+        "method": {
+            "name": "calsuite.display.commands",
+            "params": {"backend": "argyll", "steps": 5},
+        },
         "result": {
             "trc": {"effective_gamma": {"r": 2.197, "g": 2.194, "b": 2.200}},
             "black_contrast": {
@@ -104,7 +107,9 @@ def test_nominal_only_imports_size_but_not_color(caplog=None) -> None:
 
 
 def test_full_import_success() -> None:
-    result = import_calsuite_records(nominal=make_nominal(), measurement=make_measurement(), now=_NOW)
+    result = import_calsuite_records(
+        nominal=make_nominal(), measurement=make_measurement(), now=_NOW
+    )
     assert result.width_cm == pytest.approx(34.4)
     assert result.height_cm == pytest.approx(21.5)
     assert result.gamma is not None
@@ -204,7 +209,9 @@ def test_stale_measurement_warns() -> None:
 
 
 def test_notes_mention_both_records() -> None:
-    result = import_calsuite_records(nominal=make_nominal(), measurement=make_measurement(), now=_NOW)
+    result = import_calsuite_records(
+        nominal=make_nominal(), measurement=make_measurement(), now=_NOW
+    )
     assert result.notes is not None
     assert "physical screen size" in result.notes.lower()
     assert "gamma/color" in result.notes.lower()

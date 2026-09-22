@@ -81,7 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_import.add_argument(
-        "--nominal", type=Path, default=None, help="Path to a calsuite display.nominal-*.json record."
+        "--nominal",
+        type=Path,
+        default=None,
+        help="Path to a calsuite display.nominal-*.json record.",
     )
     p_import.add_argument(
         "--measurement",
@@ -101,12 +104,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Physical screen height in cm, if no --nominal record supplies one.",
     )
-    p_import.add_argument("--width-px", type=int, required=True, help="Horizontal resolution in pixels.")
-    p_import.add_argument("--height-px", type=int, required=True, help="Vertical resolution in pixels.")
+    p_import.add_argument(
+        "--width-px", type=int, required=True, help="Horizontal resolution in pixels."
+    )
+    p_import.add_argument(
+        "--height-px", type=int, required=True, help="Vertical resolution in pixels."
+    )
     p_import.add_argument(
         "--viewing-distance-cm", type=float, required=True, help="Eye-to-screen distance in cm."
     )
-    p_import.add_argument("--refresh-hz", type=float, required=True, help="Display refresh rate in Hz.")
+    p_import.add_argument(
+        "--refresh-hz", type=float, required=True, help="Display refresh rate in Hz."
+    )
     p_import.add_argument(
         "--room-lighting-controlled",
         action="store_true",
@@ -128,11 +137,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Confirm: OS HDR/adaptive-brightness/auto-contrast is disabled.",
     )
     p_import.add_argument(
-        "--environment-notes", default=None, help="Free-text environment notes (must stay pseudonymous)."
+        "--environment-notes",
+        default=None,
+        help="Free-text environment notes (must stay pseudonymous).",
     )
-    p_import.add_argument("--notes", default=None, help="Free-text notes for the Calibration record.")
     p_import.add_argument(
-        "--force", action="store_true", help="Overwrite an existing calibration file with this content hash."
+        "--notes", default=None, help="Free-text notes for the Calibration record."
+    )
+    p_import.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing calibration file with this content hash.",
     )
 
     return parser
@@ -214,7 +229,9 @@ def _cmd_import_calsuite(args: argparse.Namespace, root: Path) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    result = calsuite_import.import_calsuite_records(nominal=nominal_raw, measurement=measurement_raw)
+    result = calsuite_import.import_calsuite_records(
+        nominal=nominal_raw, measurement=measurement_raw
+    )
 
     if result.rejected:
         print("REJECTED (not imported):", file=sys.stderr)
@@ -242,7 +259,9 @@ def _cmd_import_calsuite(args: argparse.Namespace, root: Path) -> int:
     if height_cm is None:
         still_needed.append("physical screen height (no --nominal record and no --height-cm given)")
     if still_needed:
-        print("Cannot complete a calibration from calsuite data alone. Still needed:", file=sys.stderr)
+        print(
+            "Cannot complete a calibration from calsuite data alone. Still needed:", file=sys.stderr
+        )
         for item in still_needed:
             print(f"  - {item}", file=sys.stderr)
         print(

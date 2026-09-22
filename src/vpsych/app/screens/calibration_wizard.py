@@ -196,7 +196,12 @@ class _GammaStep(QWidget):
         self.external_radio = QRadioButton("Imported from calsuite (grade A)")
         self.external_radio.setVisible(False)
         self.none_radio.setChecked(True)
-        for r in (self.none_radio, self.psychophysical_radio, self.photometer_radio, self.external_radio):
+        for r in (
+            self.none_radio,
+            self.psychophysical_radio,
+            self.photometer_radio,
+            self.external_radio,
+        ):
             layout.addWidget(r)
 
         note = QLabel(
@@ -991,12 +996,14 @@ class CalibrationWizardScreen(QWidget):
             QMessageBox.warning(
                 self,
                 "Calsuite import failed",
-                "\n".join(load_errors) or "No usable calsuite display.nominal/display.measurement "
-                "record was selected.",
+                "\n".join(load_errors)
+                or "No usable calsuite display.nominal/display.measurement record was selected.",
             )
             return
 
-        result = calsuite_import.import_calsuite_records(nominal=nominal_raw, measurement=measurement_raw)
+        result = calsuite_import.import_calsuite_records(
+            nominal=nominal_raw, measurement=measurement_raw
+        )
         apply_calsuite_import(self._wizard_state, result)
 
         if result.width_cm is not None:
@@ -1012,7 +1019,9 @@ class CalibrationWizardScreen(QWidget):
         if load_errors:
             sections.append("Files skipped:\n" + "\n".join(f"• {e}" for e in load_errors))
         if result.rejected:
-            sections.append("Rejected (not imported):\n" + "\n".join(f"• {r}" for r in result.rejected))
+            sections.append(
+                "Rejected (not imported):\n" + "\n".join(f"• {r}" for r in result.rejected)
+            )
         if result.warnings:
             sections.append("Warnings:\n" + "\n".join(f"• {w}" for w in result.warnings))
         sections.append(

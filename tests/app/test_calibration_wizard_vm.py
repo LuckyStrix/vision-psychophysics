@@ -58,12 +58,16 @@ def test_geometry_step_build_success() -> None:
 
 
 def test_geometry_step_locked_width_cm_overrides_card_match() -> None:
-    step = GeometryStepState(width_px=1920, card_width_px=300.0, width_cm=34.4, width_cm_locked=True)
+    step = GeometryStepState(
+        width_px=1920, card_width_px=300.0, width_cm=34.4, width_cm_locked=True
+    )
     assert step.resolve_width_cm() == 34.4
 
 
 def test_geometry_step_unlocked_width_cm_falls_back_to_card_match() -> None:
-    step = GeometryStepState(width_px=1920, card_width_px=300.0, width_cm=34.4, width_cm_locked=False)
+    step = GeometryStepState(
+        width_px=1920, card_width_px=300.0, width_cm=34.4, width_cm_locked=False
+    )
     assert step.resolve_width_cm() == pytest.approx(estimate_display_width_cm(300.0, 1920))
 
 
@@ -115,7 +119,12 @@ def test_gamma_step_external_mode_uses_value_as_is() -> None:
     from vpsych.core.calibration.models import GammaCalibration
 
     imported = GammaCalibration(
-        method="photometer", gamma_r=2.2, gamma_g=2.19, gamma_b=2.21, lum_min_cdm2=0.3, lum_max_cdm2=400.0
+        method="photometer",
+        gamma_r=2.2,
+        gamma_g=2.19,
+        gamma_b=2.21,
+        lum_min_cdm2=0.3,
+        lum_max_cdm2=400.0,
     )
     step = GammaStepState(mode="external", external=imported)
     assert step.build() is imported
@@ -284,13 +293,20 @@ def test_bisection_sequence_result_recovers_a_known_gamma() -> None:
 
 def _sample_gamma() -> GammaCalibration:
     return GammaCalibration(
-        method="photometer", gamma_r=2.2, gamma_g=2.19, gamma_b=2.21, lum_min_cdm2=0.3, lum_max_cdm2=400.0
+        method="photometer",
+        gamma_r=2.2,
+        gamma_g=2.19,
+        gamma_b=2.21,
+        lum_min_cdm2=0.3,
+        lum_max_cdm2=400.0,
     )
 
 
 def _sample_color() -> ColorCalibration:
     primary = PrimaryChromaticity(x=0.64, y=0.33, Y_cdm2=90.0)
-    return ColorCalibration(method="measured", red=primary, green=primary, blue=primary, white=primary)
+    return ColorCalibration(
+        method="measured", red=primary, green=primary, blue=primary, white=primary
+    )
 
 
 def test_apply_calsuite_import_full_result_sets_every_field() -> None:
@@ -335,7 +351,9 @@ def test_apply_calsuite_import_appends_to_existing_notes() -> None:
 
 def test_apply_calsuite_import_then_build_calibration_succeeds() -> None:
     state = CalibrationWizardState(
-        geometry=GeometryStepState(width_px=1920, height_px=1080, refresh_hz=60.0, viewing_distance_cm=60.0),
+        geometry=GeometryStepState(
+            width_px=1920, height_px=1080, refresh_hz=60.0, viewing_distance_cm=60.0
+        ),
         environment=EnvironmentChecklist(
             room_lighting_controlled=True,
             monitor_warmed_up=True,
@@ -343,7 +361,9 @@ def test_apply_calsuite_import_then_build_calibration_succeeds() -> None:
             hdr_disabled=True,
         ),
     )
-    result = CalsuiteImportResult(width_cm=34.4, height_cm=21.5, gamma=_sample_gamma(), color=_sample_color())
+    result = CalsuiteImportResult(
+        width_cm=34.4, height_cm=21.5, gamma=_sample_gamma(), color=_sample_color()
+    )
     apply_calsuite_import(state, result)
 
     calibration = state.build_calibration(software_version="0.1.0")
