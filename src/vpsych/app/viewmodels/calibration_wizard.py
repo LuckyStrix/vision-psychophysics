@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from vpsych.core.calibration.calsuite_import import CalsuiteImportResult
 from vpsych.core.calibration.gamma import (
     GammaFitResult,
     GammaPsychophysicalEstimate,
@@ -69,6 +70,11 @@ class GeometryStepState:
         viewing_distance_cm: Eye-to-screen distance, in cm.
         resolution_source: `"os_detected"` or `"manual"`, for provenance
             display only.
+        width_cm_locked: If `True`, `width_cm` came from a trusted external
+            source (e.g. a calsuite `display.nominal` EDID read, an exact
+            physical measurement) and takes precedence over the card-match
+            estimate -- see `import_calsuite_result`. `False` (the default)
+            preserves the normal card-match-wins behavior.
     """
 
     width_px: int | None = None
@@ -79,14 +85,19 @@ class GeometryStepState:
     height_cm: float | None = None
     viewing_distance_cm: float | None = None
     resolution_source: str = "manual"
+    width_cm_locked: bool = False
 
     def resolve_width_cm(self) -> float | None:
         """Compute `width_cm` from the credit-card match, if one was entered.
 
         Returns:
-            The estimated width, or the already-entered `width_cm` if no
-            card match was given, or `None` if neither is available.
+            `width_cm` directly if `width_cm_locked` is `True` (a trusted
+            external measurement, e.g. imported from calsuite); otherwise
+            the card-match estimate if one was entered, else the
+            already-entered `width_cm`, else `None`.
         """
+        if self.width_cm_locked and self.width_cm is not None:
+            return self.width_cm
         if self.card_width_px is not None and self.width_px is not None:
             return estimate_display_width_cm(self.card_width_px, self.width_px)
         return self.width_cm
@@ -230,17 +241,25 @@ class GammaStepState:
     """Wizard state for the gamma (luminance) step.
 
     Attributes:
-        mode: Which method was used: `"photometer"`, `"psychophysical"`, or
+        mode: Which method was used: `"photometer"`, `"psychophysical"`,
+            `"external"` (already-fitted, e.g. imported from calsuite), or
             `"none"` (skipped).
         photometer_points: Measured (drive level, luminance) points, if
             `mode == "photometer"`.
         psychophysical_matches: `(target_fraction, matched_drive_level)`
             bisection matches, if `mode == "psychophysical"`.
+        external: An already-built `GammaCalibration` to use as-is, if
+            `mode == "external"` -- see `import_calsuite_result`. Unlike
+            `"photometer"`, this is not refit from raw points: calsuite's
+            own `fit_gamma`-equivalent has already run, and refitting
+            through a second, different algorithm would just add avoidable
+            disagreement on top of an already-validated number.
     """
 
     mode: GammaMode = "none"
     photometer_points: list[GammaCalibrationPoint] = field(default_factory=list)
     psychophysical_matches: list[tuple[float, float]] = field(default_factory=list)
+    external: GammaCalibration | None = None
 
     def build(self) -> GammaCalibration:
         """Build a `GammaCalibration` from this step's state.
@@ -252,6 +271,10 @@ class GammaStepState:
             WizardStepError: If `mode` needs data that hasn't been entered,
                 or the fit itself fails (e.g. too few points).
         """
+        if self.mode == "external":
+            if self.external is None:
+                raise WizardStepError("No imported gamma calibration is set.")
+            return self.external
         if self.mode == "photometer":
             if len(self.photometer_points) < 2:
                 raise WizardStepError(
@@ -436,3 +459,35 @@ def environment_checklist_warnings(checklist: EnvironmentChecklist | None) -> li
         if not getattr(checklist, attr):
             warnings.append(message)
     return warnings
+
+
+def apply_calsuite_import(wizard_state: CalibrationWizardState, result: CalsuiteImportResult) -> None:
+    """Apply a calsuite import's results into wizard state, in place.
+
+    Only touches fields the import actually produced -- resolution, refresh
+    rate, viewing distance, and the environment checklist are always left
+    for the user to fill in via the normal steps (see
+    `result.missing_required` for the authoritative list of what that is).
+
+    Args:
+        wizard_state: The wizard state to update.
+        result: The import result, from `vpsych.core.calibration.calsuite_import.import_calsuite_records`.
+    """
+    if result.width_cm is not None:
+        wizard_state.geometry.width_cm = result.width_cm
+        wizard_state.geometry.width_cm_locked = True
+    if result.height_cm is not None:
+        wizard_state.geometry.height_cm = result.height_cm
+    if result.gamma is not None:
+        wizard_state.gamma.mode = "external"
+        wizard_state.gamma.external = result.gamma
+    if result.color is not None:
+        wizard_state.color.measured = True
+        wizard_state.color.red = result.color.red
+        wizard_state.color.green = result.color.green
+        wizard_state.color.blue = result.color.blue
+        wizard_state.color.white = result.color.white
+    if result.notes:
+        wizard_state.notes = (
+            result.notes if not wizard_state.notes else f"{wizard_state.notes}\n{result.notes}"
+        )

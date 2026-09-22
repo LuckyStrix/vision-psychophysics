@@ -7,10 +7,13 @@ Each step edits `vpsych.app.viewmodels.calibration_wizard.CalibrationWizardState
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -33,11 +36,13 @@ from vpsych.app.viewmodels.calibration_wizard import (
     BisectionSequenceState,
     CalibrationWizardState,
     WizardStepError,
+    apply_calsuite_import,
     environment_checklist_warnings,
 )
 from vpsych.app.widgets.bisection_widget import BisectionWidget
 from vpsych.app.widgets.card_match import CardMatchWidget
 from vpsych.app.widgets.patch_window import PatchWindow
+from vpsych.core.calibration import calsuite_import
 from vpsych.core.calibration.gamma import fit_gamma
 from vpsych.core.calibration.geometry import DisplayQueryError, query_os_resolution_refresh
 from vpsych.core.calibration.models import (
@@ -103,6 +108,10 @@ class _GeometryStep(QWidget):
         self.card_widget = CardMatchWidget()
         self.card_widget.width_changed.connect(self._on_card_changed)
         layout.addWidget(self.card_widget)
+        self.use_card_match_button = QPushButton("Use card match instead")
+        self.use_card_match_button.setVisible(False)
+        self.use_card_match_button.clicked.connect(self._on_use_card_match)
+        layout.addWidget(self.use_card_match_button)
         self.width_estimate_label = QLabel()
         self.width_estimate_label.setProperty("role", "caption")
         layout.addWidget(self.width_estimate_label)
@@ -136,9 +145,31 @@ class _GeometryStep(QWidget):
         g.width_px = self.width_px_spin.value()
         g.height_px = self.height_px_spin.value()
         g.refresh_hz = self.refresh_spin.value()
-        g.card_width_px = self.card_widget.card_width_px
+        if not g.width_cm_locked:
+            g.card_width_px = self.card_widget.card_width_px
         g.height_cm = self.height_cm_spin.value()
         g.viewing_distance_cm = self.distance_spin.value()
+
+    def apply_imported_width_cm(self, width_cm: float) -> None:
+        """Lock `width_cm` to an imported value, disabling the card-match widget.
+
+        Args:
+            width_cm: The precise physical width (e.g. from a calsuite
+                `display.nominal` EDID read), which takes precedence over
+                any card-match estimate until "Use card match instead" is
+                clicked (`_on_use_card_match`).
+        """
+        self._state.geometry.width_cm = width_cm
+        self._state.geometry.width_cm_locked = True
+        self.card_widget.setEnabled(False)
+        self.use_card_match_button.setVisible(True)
+        self.width_estimate_label.setText(f"Physical width imported: {width_cm:.2f} cm.")
+
+    def _on_use_card_match(self) -> None:
+        self._state.geometry.width_cm_locked = False
+        self.card_widget.setEnabled(True)
+        self.use_card_match_button.setVisible(False)
+        self._on_card_changed()
 
 
 class _GammaStep(QWidget):
@@ -162,8 +193,10 @@ class _GammaStep(QWidget):
         self.none_radio = QRadioButton("None (grade C, sRGB gamma assumed)")
         self.psychophysical_radio = QRadioButton("Psychophysical estimate, no photometer (grade B)")
         self.photometer_radio = QRadioButton("Photometer measurement (grade A)")
+        self.external_radio = QRadioButton("Imported from calsuite (grade A)")
+        self.external_radio.setVisible(False)
         self.none_radio.setChecked(True)
-        for r in (self.none_radio, self.psychophysical_radio, self.photometer_radio):
+        for r in (self.none_radio, self.psychophysical_radio, self.photometer_radio, self.external_radio):
             layout.addWidget(r)
 
         note = QLabel(
@@ -176,15 +209,25 @@ class _GammaStep(QWidget):
         note.setProperty("role", "caption")
         layout.addWidget(note)
 
+        self._external_gamma: GammaCalibration | None = None
+        self.external_status_label = QLabel()
+        self.external_status_label.setWordWrap(True)
+        external_panel = QWidget()
+        external_layout = QVBoxLayout(external_panel)
+        external_layout.setContentsMargins(0, 8, 0, 0)
+        external_layout.addWidget(self.external_status_label)
+
         self.mode_stack = QStackedWidget()
         self.mode_stack.addWidget(QWidget())  # "none": nothing to configure
         self.mode_stack.addWidget(self._build_psychophysical_panel())
         self.mode_stack.addWidget(self._build_photometer_panel())
+        self.mode_stack.addWidget(external_panel)
         layout.addWidget(self.mode_stack, stretch=1)
 
         self.none_radio.toggled.connect(self._on_none_toggled)
         self.psychophysical_radio.toggled.connect(self._on_psychophysical_toggled)
         self.photometer_radio.toggled.connect(self._on_photometer_toggled)
+        self.external_radio.toggled.connect(self._on_external_toggled)
 
         layout.addStretch(1)
 
@@ -199,6 +242,26 @@ class _GammaStep(QWidget):
     def _on_photometer_toggled(self, checked: bool) -> None:
         if checked:
             self.mode_stack.setCurrentIndex(2)
+
+    def _on_external_toggled(self, checked: bool) -> None:
+        if checked:
+            self.mode_stack.setCurrentIndex(3)
+
+    def set_external_gamma(self, gamma: GammaCalibration) -> None:
+        """Show and select an imported (e.g. calsuite) gamma calibration.
+
+        Args:
+            gamma: The already-fitted `GammaCalibration` to use as-is (see
+                `GammaStepState.external`).
+        """
+        self._external_gamma = gamma
+        self.external_radio.setVisible(True)
+        self.external_status_label.setText(
+            f"Imported per-channel gamma: R={gamma.gamma_r:.3f} G={gamma.gamma_g:.3f} "
+            f"B={gamma.gamma_b:.3f}; luminance {gamma.lum_min_cdm2:.3f}-{gamma.lum_max_cdm2:.1f} "
+            "cd/m^2. This is used as-is, not refit."
+        )
+        self.external_radio.setChecked(True)
 
     # -- Psychophysical (grade B) bisection sub-panel -----------------------
 
@@ -433,7 +496,10 @@ class _GammaStep(QWidget):
 
     def commit(self) -> None:
         """Write this step's widget values into the shared wizard state."""
-        if self.photometer_radio.isChecked():
+        if self.external_radio.isChecked():
+            self._state.gamma.mode = "external"
+            self._state.gamma.external = self._external_gamma
+        elif self.photometer_radio.isChecked():
             self._state.gamma.mode = "photometer"
             self._state.gamma.photometer_points = list(self._photometer_points)
         elif self.psychophysical_radio.isChecked():
@@ -533,6 +599,24 @@ class _ColorStep(QWidget):
         spins["x"].setValue(primary.x)
         spins["y"].setValue(primary.y)
         spins["Y"].setValue(primary.Y_cdm2)
+
+    def set_imported_primaries(self, color: ColorCalibration) -> None:
+        """Show an imported (e.g. calsuite) measured color calibration.
+
+        Selects "Measured" and fills the same fields a photometer
+        measurement would, so it flows through `commit()` unchanged.
+
+        Args:
+            color: The already-measured `ColorCalibration` to display.
+        """
+        self.measured_radio.setChecked(True)
+        for key, primary in (
+            ("red", color.red),
+            ("green", color.green),
+            ("blue", color.blue),
+            ("white", color.white),
+        ):
+            self._set_primary_fields(key, primary)
 
     # -- Photometer-driven measurement ---------------------------------------
 
@@ -727,9 +811,18 @@ class CalibrationWizardScreen(QWidget):
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(12)
 
+        header_row = QHBoxLayout()
         heading = QLabel("Calibration wizard")
         heading.setProperty("role", "heading")
-        root.addWidget(heading)
+        header_row.addWidget(heading)
+        header_row.addStretch(1)
+        self.import_calsuite_button = QPushButton("Import from calsuite…")
+        self.import_calsuite_button.setAccessibleName(
+            "Import geometry, gamma, and color from calsuite display records"
+        )
+        self.import_calsuite_button.clicked.connect(self._on_import_calsuite)
+        header_row.addWidget(self.import_calsuite_button)
+        root.addLayout(header_row)
 
         self.stack = QStackedWidget()
         self._geometry_step = _GeometryStep(self._wizard_state)
@@ -866,6 +959,67 @@ class CalibrationWizardScreen(QWidget):
             calibration_badge(calibration).summary_text,
         )
         self.calibration_saved.emit()
+
+    def _on_import_calsuite(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select calsuite display record(s)",
+            "",
+            "calsuite records (*.json)",
+        )
+        if not paths:
+            return
+
+        load_errors: list[str] = []
+        nominal_raw: dict | None = None
+        measurement_raw: dict | None = None
+        for p in paths:
+            try:
+                raw = calsuite_import.load_calsuite_json(Path(p))
+            except calsuite_import.CalsuiteImportError as exc:
+                load_errors.append(str(exc))
+                continue
+            kind = raw.get("kind")
+            if kind == "display.nominal":
+                nominal_raw = raw
+            elif kind == "display.measurement":
+                measurement_raw = raw
+            else:
+                load_errors.append(f"{p}: unrecognized record kind {kind!r}, skipped.")
+
+        if nominal_raw is None and measurement_raw is None:
+            QMessageBox.warning(
+                self,
+                "Calsuite import failed",
+                "\n".join(load_errors) or "No usable calsuite display.nominal/display.measurement "
+                "record was selected.",
+            )
+            return
+
+        result = calsuite_import.import_calsuite_records(nominal=nominal_raw, measurement=measurement_raw)
+        apply_calsuite_import(self._wizard_state, result)
+
+        if result.width_cm is not None:
+            self._geometry_step.apply_imported_width_cm(result.width_cm)
+        if result.height_cm is not None:
+            self._geometry_step.height_cm_spin.setValue(result.height_cm)
+        if result.gamma is not None:
+            self._gamma_step.set_external_gamma(result.gamma)
+        if result.color is not None:
+            self._color_step.set_imported_primaries(result.color)
+
+        sections = []
+        if load_errors:
+            sections.append("Files skipped:\n" + "\n".join(f"• {e}" for e in load_errors))
+        if result.rejected:
+            sections.append("Rejected (not imported):\n" + "\n".join(f"• {r}" for r in result.rejected))
+        if result.warnings:
+            sections.append("Warnings:\n" + "\n".join(f"• {w}" for w in result.warnings))
+        sections.append(
+            "Still needed before you can save:\n"
+            + "\n".join(f"• {m}" for m in result.missing_required)
+        )
+        QMessageBox.information(self, "Calsuite import", "\n\n".join(sections))
 
 
 def _int_spin(lo: int, hi: int, value: int) -> QSpinBox:
