@@ -51,6 +51,25 @@ def test_participant_dir_invalid_id(tmp_path: Path) -> None:
         paths.participant_dir("sub-1", tmp_path)  # wrong digit count
 
 
+@pytest.mark.parametrize(
+    "participant_id", ["sub-0001\n", "sub-0001 ", "sub-\u0660\u0660\u0660\u0661"]
+)
+def test_participant_dir_rejects_newline_space_and_unicode_digits(
+    tmp_path: Path, participant_id: str
+) -> None:
+    with pytest.raises(ValueError, match="participant_id"):
+        paths.participant_dir(participant_id, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["ses-20260916T103000\n", "ses-\u0662\u0660\u0662\u0666\u0660\u0669\u0661\u0666T103000"],
+)
+def test_session_dir_rejects_newline_and_unicode_digits(tmp_path: Path, session_id: str) -> None:
+    with pytest.raises(ValueError, match="session_id"):
+        paths.session_dir("sub-0001", session_id, tmp_path)
+
+
 def test_session_dir(tmp_path: Path) -> None:
     p = paths.session_dir("sub-0001", "ses-20260916T103000", tmp_path)
     assert p == tmp_path / "sub-0001" / "ses-20260916T103000"

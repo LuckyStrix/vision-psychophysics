@@ -33,7 +33,7 @@ import re
 from pathlib import Path
 
 _PARTICIPANT_ID_RE = re.compile(r"^sub-[0-9]{4}$")
-_SESSION_ID_RE = re.compile(r"^ses-\d{8}T\d{6}$")
+_SESSION_ID_RE = re.compile(r"^ses-[0-9]{8}T[0-9]{6}$")
 _TASK_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _EYE_RE = re.compile(r"^(OD|OS|OU)$")
 
@@ -42,7 +42,7 @@ _DEFAULT_DATA_ROOT = "~/vpsych-data"
 
 
 def _validate(value: str, pattern: re.Pattern[str], kind: str) -> str:
-    if not pattern.match(value):
+    if not pattern.fullmatch(value):
         raise ValueError(f"Invalid {kind}: {value!r} does not match {pattern.pattern!r}")
     return value
 
