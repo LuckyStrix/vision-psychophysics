@@ -100,3 +100,13 @@ def test_export_data_dictionary_documents_trial_columns(tmp_path: Path) -> None:
         assert "intensity" in dictionary
         assert "participant_id" in dictionary
         assert "logMAR" in dictionary or "intensity_units" in dictionary
+
+
+def test_export_does_not_include_the_zip_being_written(tmp_path: Path) -> None:
+    pid, _, _ = build_full_session(tmp_path)
+    out_zip = tmp_path / pid / "export.zip"
+
+    export.export_participant(pid, out_zip, tmp_path)
+
+    with zipfile.ZipFile(out_zip) as zf:
+        assert not any(n.endswith("export.zip") for n in zf.namelist())

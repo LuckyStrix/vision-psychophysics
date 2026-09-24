@@ -170,6 +170,7 @@ def _export(root: Path, out_zip: Path, participant_id: str | None) -> Path:
     data_dictionary = _build_data_dictionary()
 
     out_zip.parent.mkdir(parents=True, exist_ok=True)
+    out_zip_resolved = out_zip.resolve()
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         schema_dir = _write_json_schemas(tmp_dir)
@@ -198,7 +199,8 @@ def _export(root: Path, out_zip: Path, participant_id: str | None) -> Path:
                 if not pdir.is_dir():
                     continue
                 for file_path in sorted(pdir.rglob("*")):
-                    if file_path.is_file():
+                    # Never archive the zip being written, if it lives under the tree.
+                    if file_path.is_file() and file_path.resolve() != out_zip_resolved:
                         zf.write(file_path, arcname=f"raw/{file_path.relative_to(root).as_posix()}")
 
             zf.writestr("summaries_tidy.csv", tidy_csv)
