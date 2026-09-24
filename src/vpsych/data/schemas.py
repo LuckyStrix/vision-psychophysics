@@ -189,6 +189,8 @@ class TestSummary(BaseModel):
             unchanged raw trial data).
     """
 
+    __test__ = False  # not a pytest test class, despite the name
+
     model_config = ConfigDict(frozen=True)
 
     task_id: str = Field(description="TestSpec.id this summary is for.")

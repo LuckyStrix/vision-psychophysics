@@ -65,6 +65,8 @@ class TestRequirements(BaseModel):
             against `DisplayGeometry.nyquist_cpd`.
     """
 
+    __test__ = False  # not a pytest test class, despite the name
+
     model_config = ConfigDict(frozen=True)
 
     needs_gamma_calibration: bool = Field(
@@ -131,6 +133,8 @@ class TestSpec(BaseModel):
             selectable by a real participant. See
             `vpsych.tests_catalog._example` for the canonical use.
     """
+
+    __test__ = False  # not a pytest test class, despite the name
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
