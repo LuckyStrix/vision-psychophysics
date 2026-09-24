@@ -437,7 +437,7 @@ def history_figure(history: list[dict], task_id: str, units: str) -> Figure:
         ax.errorbar(
             x,
             y,
-            yerr=[y_err_low, y_err_high],
+            yerr=np.vstack([y_err_low, y_err_high]),
             fmt="o-",
             capsize=5,
             capthick=1,

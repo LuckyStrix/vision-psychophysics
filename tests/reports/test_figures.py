@@ -607,3 +607,26 @@ def test_psychometric_figure_threshold_marker_is_in_intensity_units() -> None:
     # ...which is nowhere near the raw Hz value, and inside the tested range.
     assert abs(dashed[0] - summary.estimate.value) > 1.0
     assert trials["intensity"].min() <= dashed[0] <= trials["intensity"].max()
+
+
+def test_history_figure_single_session_emits_no_numpy_deprecation_warning() -> None:
+    """A one-point history used to pass 1-element arrays as scalars to matplotlib."""
+    import warnings
+
+    history = [
+        {
+            "session_id": "ses-20260901T100000",
+            "run": 1,
+            "value": -1.0,
+            "ci_low": -1.2,
+            "ci_high": -0.8,
+            "ci_level": 0.95,
+            "units": "logMAR",
+            "eye": "OD",
+            "started_utc": "2026-09-01T10:00:00+00:00",
+        }
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        fig = history_figure(history, "visual_acuity", "logMAR")
+    assert len(fig.axes) == 1
