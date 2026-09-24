@@ -2,8 +2,8 @@ name: Scientific validation
 
 # High-repetition scientific validation tests (bias/CI-coverage checks over
 # hundreds of simulated runs per procedure/test, see `pytest.ini_options`'
-# `slow` marker in pyproject.toml). Excluded from the fast `ci.yml` run (kept
-# under 60s) and instead run on a schedule plus on demand, so a slow
+# `slow` marker in pyproject.toml). Excluded from the default `ci.yml` run (which
+# still takes a few minutes) and instead run on a schedule plus on demand, so a slow
 # regression is still caught without slowing down every push/PR.
 on:
   schedule:
