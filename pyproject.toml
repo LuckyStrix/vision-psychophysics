@@ -108,7 +108,6 @@ warn_unreachable = true
 [[tool.mypy.overrides]]
 module = [
     "psychopy.*",
-    "psychtoolbox.*",
     "questplus.*",
     "colour.*",
     "scipy.*",
