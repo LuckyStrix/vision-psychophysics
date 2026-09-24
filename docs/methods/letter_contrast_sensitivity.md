@@ -220,9 +220,8 @@ alone in a later analysis pass; this test does not compute one itself.
 - Procedural letterform approximation (not real Sloan letterforms) -- see
   above.
 - Not equivalent to a physical Pelli-Robson chart score -- see above.
-- `n_dropped_frames` is currently always logged as 0 by this test's
-  real-display presentation path, matching the same current project-wide
-  limitation `contrast_sensitivity_function` documents.
+- Dropped frames are counted from the stimulus-phase flip timestamps
+  only (see `contrast_sensitivity_function`'s limitations).
 - The default 40-trial budget is a documented convention, not derived from
   a formal power analysis targeting a specific bias/coverage bound (unlike
   qCSF's 300-trial recommendation, which does rest on such a sweep); the

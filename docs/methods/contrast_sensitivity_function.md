@@ -219,11 +219,10 @@ use no randomness; `csf_curve`'s own randomness is a fixed local seed, not
   engineering choice, not derived from a specific psychophysical study of
   this exact display/stimulus combination; a well-characterized display
   might tolerate closer to the bare 2-px/cycle Nyquist limit in practice.
-- `n_dropped_frames` is currently always logged as 0 by this test's real-
-  display presentation path (matching `tests_catalog._example`'s own
-  current limitation) -- true frame-drop detection during stimulus
-  presentation is not yet wired up project-wide; see "Shared-code notes"
-  below.
+- Dropped frames are detected from the flip timestamps of the stimulus
+  phase (`vpsych.core.timing.presentation_timing`, shared by every test).
+  Only the stimulus phase is monitored: a drop during fixation, the
+  response wait or the ITI is not counted.
 - AULCSF's point estimate is systematically biased low at typical trial
   counts (see `docs/METHODS.md`); 300+ trials keeps this under 0.05 log
   units on average, but single-run variability remains substantial

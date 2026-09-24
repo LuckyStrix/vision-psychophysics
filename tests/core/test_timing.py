@@ -7,6 +7,7 @@ import pytest
 from vpsych.core.timing import (
     FrameTimingStats,
     measure_refresh,
+    presentation_timing,
     refresh_matches,
     summarize_frame_intervals,
 )
@@ -153,3 +154,22 @@ def test_refresh_matches(measured: float, expected: float, tol: float, matches: 
 def test_refresh_matches_invalid_expected_raises() -> None:
     with pytest.raises(ValueError, match="expected_hz"):
         refresh_matches(60.0, 0.0)
+
+
+def test_presentation_timing_clean_flips() -> None:
+    flips = [i / 60.0 for i in range(10)]
+    intervals, n_dropped = presentation_timing(flips, refresh_hz=60.0)
+    assert len(intervals) == 9
+    assert n_dropped == 0
+
+
+def test_presentation_timing_detects_skipped_frame() -> None:
+    flips = [0.0, 1 / 60, 3 / 60, 4 / 60]  # one refresh skipped between flips 2 and 3
+    intervals, n_dropped = presentation_timing(flips, refresh_hz=60.0)
+    assert intervals == pytest.approx([1 / 60, 2 / 60, 1 / 60])
+    assert n_dropped == 1
+
+
+@pytest.mark.parametrize("flips", [[], [0.5]])
+def test_presentation_timing_too_few_flips(flips: list[float]) -> None:
+    assert presentation_timing(flips, refresh_hz=60.0) == ([], 0)

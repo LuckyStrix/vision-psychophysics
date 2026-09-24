@@ -57,6 +57,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
+from vpsych.core.timing import presentation_timing
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import QualityFlag, TestSummary
 from vpsych.tests_catalog.base import (
@@ -417,12 +418,12 @@ class VisualAcuityTest(PsychophysicalTest):
         onset_s: float | None = None
         response_key: str | None = None
         rt_s: float | None = None
-        n_flips = 0
+        flip_times: list[float] = []
         for frame in range(max_response_frames):
             if stim_only_frames is None or frame < stim_only_frames:
                 optotype.draw()
             flip_time = win.flip()
-            n_flips += 1
+            flip_times.append(flip_time)
             if frame == 0:
                 onset_s = flip_time
                 keyboard.clearEvents()
@@ -437,12 +438,14 @@ class VisualAcuityTest(PsychophysicalTest):
         for _ in range(iti_frames):
             win.flip()
 
+        intervals_s, n_dropped = presentation_timing(flip_times, self.display.refresh_hz)
+
         return PresentedTrial(
             response=response,
             rt_s=rt_s,
             stimulus_onset_s=onset_s or 0.0,
-            n_dropped_frames=0,
-            frame_intervals_s=[1.0 / self.display.refresh_hz] * max(n_flips, 1),
+            n_dropped_frames=n_dropped,
+            frame_intervals_s=intervals_s,
         )
 
     def response_keys(self) -> list[str]:

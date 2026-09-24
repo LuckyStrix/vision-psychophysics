@@ -66,6 +66,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.procedures.qcsf import QCSF, RECOMMENDED_MIN_TRIALS, log_contrast_sensitivity
+from vpsych.core.timing import presentation_timing
 from vpsych.core.trial import TrialTimeline
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import QualityFlag, TestSummary
@@ -379,6 +380,7 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
 
         keyboard.clearEvents()
         onset_s = None
+        flip_times: list[float] = []
         for frame in range(n_frames):
             frame_contrast = contrast * float(temporal_env[frame])
             # Dither is refreshed every stimulus frame (not once per trial),
@@ -389,6 +391,7 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
             image_stim.image = dithered * 2.0 - 1.0  # [0,1] -> [-1,1] for colorSpace="rgb"
             image_stim.draw()
             flip_time = win.flip()
+            flip_times.append(flip_time)
             if frame == 0:
                 onset_s = flip_time
 
@@ -400,12 +403,14 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
         for _ in range(timeline.iti_frames):
             win.flip()
 
+        intervals_s, n_dropped = presentation_timing(flip_times, self.display.refresh_hz)
+
         return PresentedTrial(
             response=response,
             rt_s=rt_s,
             stimulus_onset_s=onset_s or 0.0,
-            n_dropped_frames=0,
-            frame_intervals_s=[1.0 / self.display.refresh_hz] * n_frames,
+            n_dropped_frames=n_dropped,
+            frame_intervals_s=intervals_s,
         )
 
     def response_keys(self) -> list[str]:

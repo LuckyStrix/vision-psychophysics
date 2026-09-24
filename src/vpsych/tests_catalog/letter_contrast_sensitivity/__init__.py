@@ -54,6 +54,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
+from vpsych.core.timing import presentation_timing
 from vpsych.core.trial import TrialTimeline
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import TestSummary
@@ -276,6 +277,7 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
         response = None
         rt_s = None
         max_frames = timeline.stimulus_frames
+        flip_times: list[float] = []
         for frame in range(max_frames):
             # Dither is refreshed every frame the letter is visible (self-paced,
             # like a printed chart), matching contrast_sensitivity_function's
@@ -285,6 +287,7 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
             image_stim.image = dithered * 2.0 - 1.0
             image_stim.draw()
             flip_time = win.flip()
+            flip_times.append(flip_time)
             if frame == 0:
                 onset_s = flip_time
             keys = keyboard.getKeys(keyList=self.response_keys(), timeStamped=True)
@@ -295,12 +298,14 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
         for _ in range(timeline.iti_frames):
             win.flip()
 
+        intervals_s, n_dropped = presentation_timing(flip_times, self.display.refresh_hz)
+
         return PresentedTrial(
             response=response,
             rt_s=rt_s,
             stimulus_onset_s=onset_s or 0.0,
-            n_dropped_frames=0,
-            frame_intervals_s=[1.0 / self.display.refresh_hz] * max_frames,
+            n_dropped_frames=n_dropped,
+            frame_intervals_s=intervals_s,
         )
 
     def response_keys(self) -> list[str]:

@@ -24,7 +24,6 @@ QUEST+ assumes p(correct) increases with intensity, but CFF performance
 
 from __future__ import annotations
 
-import itertools
 from typing import Any, Literal
 
 import numpy as np
@@ -34,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from vpsych.core.calibration.gamma import GammaChannelModel, fit_gamma_lookup, linearize
 from vpsych.core.procedures.base import ThresholdEstimate
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
-from vpsych.core.timing import summarize_frame_intervals
+from vpsych.core.timing import presentation_timing
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import QualityFlag, TestSummary
 from vpsych.tests_catalog.base import (
@@ -497,14 +496,13 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
         for _ in range(timeline.iti_frames):
             win.flip()
 
-        intervals_s = [b - a for a, b in itertools.pairwise(flip_times)]
-        stats = summarize_frame_intervals(intervals_s, refresh_hz)
+        intervals_s, n_dropped = presentation_timing(flip_times, refresh_hz)
 
         return PresentedTrial(
             response=response,
             rt_s=rt_s,
             stimulus_onset_s=onset_s or 0.0,
-            n_dropped_frames=stats.n_dropped,
+            n_dropped_frames=n_dropped,
             frame_intervals_s=intervals_s,
         )
 

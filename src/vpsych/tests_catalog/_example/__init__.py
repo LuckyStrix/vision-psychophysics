@@ -28,6 +28,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from vpsych.core.procedures.questplus_procedure import QuestPlusProcedure
+from vpsych.core.timing import presentation_timing
 from vpsych.data.quality import compute_quality_flags
 from vpsych.data.schemas import TestSummary
 from vpsych.tests_catalog.base import (
@@ -229,9 +230,11 @@ class ExampleContrastTest(PsychophysicalTest):
 
         keyboard.clearEvents()
         onset_s = None
+        flip_times: list[float] = []
         for frame in range(timeline.stimulus_frames):
             self._draw_grating(contrast, correct_side)
             flip_time = win.flip()
+            flip_times.append(flip_time)
             if frame == 0:
                 onset_s = flip_time
 
@@ -241,12 +244,14 @@ class ExampleContrastTest(PsychophysicalTest):
         for _ in range(timeline.iti_frames):
             win.flip()
 
+        intervals_s, n_dropped = presentation_timing(flip_times, self.display.refresh_hz)
+
         return PresentedTrial(
             response=response,
             rt_s=rt_s,
             stimulus_onset_s=onset_s or 0.0,
-            n_dropped_frames=0,
-            frame_intervals_s=[1.0 / self.display.refresh_hz] * timeline.stimulus_frames,
+            n_dropped_frames=n_dropped,
+            frame_intervals_s=intervals_s,
         )
 
     def response_keys(self) -> list[str]:

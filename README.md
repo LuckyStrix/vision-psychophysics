@@ -5,8 +5,13 @@ acuity, contrast sensitivity, color discrimination, motion coherence, and
 temporal and hyperacuity thresholds, using standard adaptive psychophysical
 methods (QUEST+, weighted staircases, method of constant stimuli).
 
-**Status: pre-alpha.** Interfaces are still being frozen and most test
-implementations are stubs. Expect breaking changes.
+**Status: pre-alpha.** Seven tests are implemented (visual acuity, contrast
+sensitivity function, letter contrast sensitivity, color discrimination,
+motion coherence, critical flicker fusion, vernier acuity), along with
+the desktop app, calibration (including photometer/Argyll and calsuite
+import) and HTML reports. All tests are validated against simulated
+observers; validation on real displays and human participants is still
+pending. Interfaces are still being frozen, so expect breaking changes.
 
 ## Not a medical device
 
@@ -34,7 +39,7 @@ uv sync
 uv run pytest
 ```
 
-Run the desktop app (once implemented):
+Run the desktop app:
 
 ```bash
 uv run vpsych

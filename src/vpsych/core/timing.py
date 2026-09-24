@@ -9,6 +9,7 @@ headless.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
 from typing import Any
 
@@ -115,6 +116,33 @@ def summarize_frame_intervals(
         dropped_fraction=dropped_fraction,
         expected_ms=expected_ms,
     )
+
+
+def presentation_timing(
+    flip_times: Sequence[float],
+    refresh_hz: float,
+    drop_tolerance: float = 1.5,
+) -> tuple[list[float], int]:
+    """Turn a trial's stimulus-phase flip timestamps into intervals and a drop count.
+
+    Shared by every test's real-display ``present()`` so dropped frames are
+    detected the same way everywhere: collect the value returned by each
+    ``win.flip()`` during the stimulus phase, then call this once.
+
+    Args:
+        flip_times: Timestamps returned by successive ``win.flip()`` calls
+            during the stimulus phase, in seconds.
+        refresh_hz: Display refresh rate, in hertz.
+        drop_tolerance: See :func:`summarize_frame_intervals`.
+
+    Returns:
+        ``(intervals_s, n_dropped)``: the successive differences of
+        ``flip_times`` (empty if fewer than 2 flips) and the number of those
+        intervals classified as dropped frames.
+    """
+    intervals_s = [b - a for a, b in itertools.pairwise(flip_times)]
+    stats = summarize_frame_intervals(intervals_s, refresh_hz, drop_tolerance)
+    return intervals_s, stats.n_dropped
 
 
 def measure_refresh(win: Any, n_frames: int = 120) -> float:
