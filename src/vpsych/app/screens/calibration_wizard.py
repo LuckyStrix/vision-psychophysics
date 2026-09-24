@@ -7,10 +7,13 @@ Each step edits `vpsych.app.viewmodels.calibration_wizard.CalibrationWizardState
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -172,7 +175,26 @@ class _GeometryStep(QWidget):
         self._on_card_changed()
 
 
-class _GammaStep(QWidget):
+class _PhotometerSessionMixin:
+    """Owns the ``spotread`` session a step opens, so no path can strand it.
+
+    An open session is a live ``spotread`` process on a pty, which can keep
+    the instrument claimed: it must be closed on every failure, before
+    opening another, and once the step no longer needs the instrument.
+    """
+
+    _photometer_session: object | None
+    _photometer: object | None
+
+    def _release_photometer(self) -> None:
+        session, self._photometer_session, self._photometer = self._photometer_session, None, None
+        close = getattr(session, "close", None)
+        if close is not None:
+            with contextlib.suppress(Exception):
+                close()
+
+
+class _GammaStep(_PhotometerSessionMixin, QWidget):
     def __init__(self, state: CalibrationWizardState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state = state
@@ -390,6 +412,7 @@ class _GammaStep(QWidget):
         from vpsych.core.calibration.argyll import (
             ArgyllCalibrationRequiredError,
             ArgyllNotAvailableError,
+            ArgyllReadError,
             ArgyllSpotreadSession,
             InstrumentKind,
         )
@@ -397,6 +420,7 @@ class _GammaStep(QWidget):
         instrument: InstrumentKind = (
             "colorimeter" if self.colorimeter_radio.isChecked() else "spectrometer"
         )
+        self._release_photometer()
         session = ArgyllSpotreadSession(instrument=instrument)
         self._photometer_session = session
         try:
@@ -404,7 +428,8 @@ class _GammaStep(QWidget):
         except ArgyllCalibrationRequiredError as exc:
             self._handle_gamma_calibration_prompt(exc)
             return
-        except ArgyllNotAvailableError as exc:
+        except (ArgyllNotAvailableError, ArgyllReadError) as exc:
+            self._release_photometer()
             self.photometer_status_label.setText(str(exc))
             return
         self._on_photometer_ready()
@@ -429,6 +454,7 @@ class _GammaStep(QWidget):
             self._handle_gamma_calibration_prompt(exc2)
             return
         except (ArgyllNotAvailableError, ArgyllReadError) as exc2:
+            self._release_photometer()
             self.photometer_status_label.setText(f"Calibration failed: {exc2}")
             return
         self._on_photometer_ready()
@@ -486,6 +512,7 @@ class _GammaStep(QWidget):
             )
 
     def _finish_photometer_gamma(self) -> None:
+        self._release_photometer()
         self.take_reading_button.setEnabled(False)
         if self._patch_window is not None:
             self._patch_window.close()
@@ -523,7 +550,7 @@ _PRIMARY_ROWS: tuple[tuple[str, str, tuple[float, float, float]], ...] = (
 )
 
 
-class _ColorStep(QWidget):
+class _ColorStep(_PhotometerSessionMixin, QWidget):
     def __init__(self, state: CalibrationWizardState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state = state
@@ -635,9 +662,11 @@ class _ColorStep(QWidget):
         from vpsych.core.calibration.argyll import (
             ArgyllCalibrationRequiredError,
             ArgyllNotAvailableError,
+            ArgyllReadError,
             ArgyllSpotreadSession,
         )
 
+        self._release_photometer()
         session = ArgyllSpotreadSession(instrument="spectrometer")
         self._photometer_session = session
         try:
@@ -645,7 +674,8 @@ class _ColorStep(QWidget):
         except ArgyllCalibrationRequiredError as exc:
             self._handle_color_calibration_prompt(exc)
             return
-        except ArgyllNotAvailableError as exc:
+        except (ArgyllNotAvailableError, ArgyllReadError) as exc:
+            self._release_photometer()
             self.color_photometer_status_label.setText(str(exc))
             return
         self._measure_all_primaries()
@@ -670,6 +700,7 @@ class _ColorStep(QWidget):
             self._handle_color_calibration_prompt(exc2)
             return
         except (ArgyllNotAvailableError, ArgyllReadError) as exc2:
+            self._release_photometer()
             self.color_photometer_status_label.setText(f"Calibration failed: {exc2}")
             return
         self._measure_all_primaries()
@@ -703,10 +734,12 @@ class _ColorStep(QWidget):
             self._handle_color_calibration_prompt(exc)
             return
         except (ArgyllNotAvailableError, ArgyllReadError) as exc:
+            self._release_photometer()
             self.color_photometer_status_label.setText(f"Measurement failed: {exc}")
             return
         finally:
             self._patch_window.close()
+        self._release_photometer()
         self.color_photometer_status_label.setText(
             "All four primaries measured. Review the values below, then click Next."
         )
@@ -858,6 +891,18 @@ class CalibrationWizardScreen(QWidget):
         root.addLayout(nav_row)
 
         self._update_nav()
+
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._release_photometers)
+
+    def _release_photometers(self) -> None:
+        self._gamma_step._release_photometer()
+        self._color_step._release_photometer()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override
+        self._release_photometers()
+        super().closeEvent(event)
 
     def _on_back(self) -> None:
         idx = self.stack.currentIndex()
