@@ -23,6 +23,7 @@ from vpsych.core.calibration.argyll import (
     SpotreadProtocol,
     classify_line,
     detect_instrument,
+    identify_instrument,
     parse_result_line,
     reading_to_primary_chromaticity,
     spotread_available,
@@ -43,9 +44,9 @@ usage: spotread [-options] [logfile]
  -v                   Verbose mode
 """
 
-# Representative (not device-captured; see argyll.py's module docstring)
-# prompt/result lines, modelled on ArgyllCMS's documented spotread
-# interaction for emissive spot reads.
+# Representative (not device-captured) prompt/result lines modelled on
+# ArgyllCMS's documented spotread interaction. The genuine ColorMunki Photo
+# transcript is used further down (`_REAL_CAL_PROMPT` and friends).
 _MEASURE_PROMPT_LINE = (
     "Place instrument on spot to be measured, and hit any key to read it,\nor Esc, Q or ^C to exit"
 )
@@ -171,6 +172,53 @@ def test_detect_instrument_timeout_suggests_instrument_attached(
 
     result = detect_instrument(runner=fake_runner)
     assert result.available is True
+
+
+# `spotread -?` usage text, port-list part, as captured from a real ColorMunki
+# Photo session (via the sibling calsuite project).
+_REAL_PORT_LIST = (
+    "usage: spotread [-options] [logfile]\n"
+    " -c listno            Set instrument port from the following list (default 1)\n"
+    "    1 = '/dev/bus/usb/003/008 (X-Rite ColorMunki)'\n"
+    "    2 = '/dev/ttyS0'\n"
+)
+
+
+def _runner_returning(stdout: str, calls: list[list[str]] | None = None):
+    def runner(args: object, _timeout: float) -> subprocess.CompletedProcess[str]:
+        if calls is not None:
+            calls.append(list(args))  # type: ignore[call-overload]
+        return subprocess.CompletedProcess(
+            args=["spotread"], returncode=1, stdout=stdout, stderr=""
+        )
+
+    return runner
+
+
+def test_identify_instrument_reads_the_name_from_the_port_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/spotread")
+    assert identify_instrument(runner=_runner_returning(_REAL_PORT_LIST)) == "X-Rite ColorMunki"
+
+
+def test_identify_instrument_none_when_only_serial_ports_are_listed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/spotread")
+    serial_only = "    1 = '/dev/ttyS0'\n    2 = '/dev/ttyS1'\n"
+    assert identify_instrument(runner=_runner_returning(serial_only)) is None
+
+
+def test_detect_instrument_uses_the_port_list_without_opening_the_instrument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/bin/spotread")
+    calls: list[list[str]] = []
+    result = detect_instrument(runner=_runner_returning(_REAL_PORT_LIST, calls))
+    assert result.available is True
+    assert "X-Rite ColorMunki" in result.message
+    assert calls == [["spotread", "-?"]]  # never launched `spotread -e`
 
 
 # ---------------------------------------------------------------------------
@@ -371,3 +419,124 @@ def test_argyll_photometer_end_to_end_per_channel() -> None:
     assert cal.gamma_r == pytest.approx(2.1, rel=1e-3)
     assert cal.gamma_g == pytest.approx(2.3, rel=1e-3)
     assert cal.gamma_b == pytest.approx(2.5, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# SpotreadProtocol against the real ColorMunki Photo transcript
+# ---------------------------------------------------------------------------
+#
+# Lines of a real ``spotread -e`` session (ArgyllCMS 2.3.1, ColorMunki Photo),
+# captured in the sibling calsuite project. The two prompts spotread leaves
+# without a trailing newline arrive as their own "lines" (see
+# ``ArgyllSpotreadSession._next_line``).
+
+_REAL_CAL_PROMPT = [
+    "",
+    "Spot read needs a calibration before continuing",
+    "",
+    "Set instrument sensor to calibration position,",
+    " and then hit any key to continue,",
+    " or hit Esc or Q to abort: ",
+]
+_REAL_READY = [
+    "Calibration complete",
+    "",
+    "Place instrument on spot to be measured,",
+    "and hit [A-Z] to read white and setup FWA compensation (keyed to letter)",
+    "Hit ESC or Q to exit, instrument switch or any other key to take a reading: ",
+]
+_REAL_RESULT = " Result is XYZ: 6.322786 5.570381 2.072769, D50 Lab: 28.30 10.67 17.80"
+_REAL_IDLE = ["", "Place instrument on spot to be measured,", *_REAL_READY[3:]]
+
+
+def _real_protocol(lines: list[str]) -> tuple[SpotreadProtocol, _FakeTransport]:
+    transport = _FakeTransport(lines)
+    return SpotreadProtocol(transport.next_line, transport.send_key), transport
+
+
+def test_classify_calibration_complete_is_not_a_prompt() -> None:
+    assert classify_line("Calibration complete") == "other"
+    assert classify_line(
+        "Hit ESC or Q to exit, instrument switch or any other key to take a reading:"
+    ) == ("measure_prompt")
+
+
+def test_real_transcript_raises_one_calibration_dialog_with_the_whole_instruction() -> None:
+    protocol, transport = _real_protocol([*_REAL_CAL_PROMPT, *_REAL_READY])
+    with pytest.raises(ArgyllCalibrationRequiredError) as exc_info:
+        protocol.wait_for_ready()
+    text = exc_info.value.prompt_text
+    assert "calibration position" in text
+    assert "any key to continue" in text
+    assert transport.sent_keys == []  # nothing is sent until the human has seen it
+
+
+def test_real_transcript_confirm_reaches_ready_without_further_dialogs_or_stray_keys() -> None:
+    protocol, transport = _real_protocol(
+        [*_REAL_CAL_PROMPT, *_REAL_READY, _REAL_RESULT, *_REAL_IDLE]
+    )
+    with pytest.raises(ArgyllCalibrationRequiredError):
+        protocol.wait_for_ready()
+    protocol.confirm_calibration()  # "Calibration complete" must not raise again
+    assert transport.sent_keys == [" "]
+    reading = protocol.read_patch()
+    assert pytest.approx(5.570381) == reading.Y
+    assert transport.sent_keys == [" ", " "]  # exactly one key per action: no extra reading taken
+
+
+def test_real_transcript_wrong_dial_position_asks_again_then_succeeds() -> None:
+    protocol, transport = _real_protocol([*_REAL_CAL_PROMPT, *_REAL_CAL_PROMPT, *_REAL_READY])
+    with pytest.raises(ArgyllCalibrationRequiredError):
+        protocol.wait_for_ready()
+    with pytest.raises(ArgyllCalibrationRequiredError) as exc_info:
+        protocol.confirm_calibration()
+    assert "calibration position" in exc_info.value.prompt_text
+    protocol.confirm_calibration()
+    assert transport.sent_keys == [" ", " "]
+
+
+def test_real_transcript_readings_are_not_shifted_by_leftover_prompt_lines() -> None:
+    results = [
+        f" Result is XYZ: {n}.000000 {n * 2}.000000 {n * 3}.000000, D50 Lab: 1.0 2.0 3.0"
+        for n in (1, 2, 3)
+    ]
+    lines = [*_REAL_READY]
+    for result in results:
+        lines += [result, *_REAL_IDLE]
+    protocol, _ = _real_protocol(lines)
+    assert [protocol.read_patch().Y for _ in results] == pytest.approx([2.0, 4.0, 6.0])
+
+
+def test_recalibration_request_after_a_result_keeps_the_reading_and_sends_no_key() -> None:
+    protocol, transport = _real_protocol(
+        [*_REAL_READY, _REAL_RESULT, *_REAL_CAL_PROMPT, *_REAL_READY]
+    )
+    reading = protocol.read_patch()
+    assert pytest.approx(5.570381) == reading.Y
+    assert transport.sent_keys == [" "]
+    with pytest.raises(ArgyllCalibrationRequiredError) as exc_info:
+        protocol.read_patch()  # would previously have fired a key into the calibration prompt
+    assert "calibration position" in exc_info.value.prompt_text
+    assert transport.sent_keys == [" "]
+    protocol.confirm_calibration()
+    assert transport.sent_keys == [" ", " "]
+
+
+def test_misread_returning_to_the_ready_prompt_fails_fast() -> None:
+    protocol, _ = _real_protocol([*_REAL_READY, "", "Spot read failed due to misread", *_REAL_IDLE])
+    with pytest.raises(ArgyllReadError, match="misread"):
+        protocol.read_patch()
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Result is XYZ: 0.000000 0.000000 0.000000, D50 Lab: 0.00 0.00 0.00",
+        "Result is XYZ: 1.2e-05 3.4E-06 5e-07, D50 Lab: 0.00 0.00 0.00",
+        "Result is XYZ: 6.322786, 5.570381, 2.072769",
+    ],
+)
+def test_parse_result_line_accepts_zero_exponent_and_comma_separated_values(line: str) -> None:
+    reading = parse_result_line(line)
+    assert reading.X >= 0.0
+    assert reading.Y >= 0.0

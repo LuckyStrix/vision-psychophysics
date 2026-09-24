@@ -187,8 +187,15 @@ directly for XYZ; this is stable across `spotread`'s `-x`/`-h`/`-u`
 secondary-format flags (they only change what follows the XYZ triple), so
 none of them need to be passed. Prompt lines are matched by keyword
 (`"calibrat..."`, `"place instrument"`/`"spot to be measured"`) rather than
-an exact string, since exact `spotread` prompt wording could not be
-verified without the physical device in this build -- see the caveat below.
+an exact string, since prompt wording varies by instrument and Argyll
+release -- see the caveat below. The prompt handling was reworked against a
+real ColorMunki Photo `spotread -e` transcript (ArgyllCMS 2.3.1) recorded in
+the sibling `calsuite` project: a calibration prompt spans several lines and
+is raised as **one** dialog, "Calibration complete" is not a prompt, the
+"Hit ESC or Q ... to take a reading:" and "... to abort:" prompts have no
+trailing newline, and a reading that is followed by a recalibration request
+is returned and the request is raised by the *next* call. Only a space key
+is ever sent (letters are `spotread` commands).
 
 **What is verified vs. what needs live hardware.** The "no instrument
 attached" failure path (`spotread -e` exits fast with "Diagnostic: Unknown,
@@ -196,13 +203,12 @@ inappropriate or no instrument detected") was captured from a real
 ArgyllCMS 2.3.1 `spotread -e` run in this environment (the ColorMunki was
 not plugged in) and is committed verbatim as a test fixture. The successful
 calibration-prompt and measurement/result interaction has **not** been
-run against real hardware in this build; `SpotreadProtocol`'s tests use
-representative (not device-captured) prompt/result text modelled on
-ArgyllCMS's documented `spotread` behavior. Before trusting a grade-A
+run against real hardware in this build; the tests replay the calsuite
+transcript (captured from real hardware by that project) through both the
+line-level state machine and a pty-backed fake `spotread`. Before trusting a grade-A
 calibration produced this way, plug in a ColorMunki and run the
-calibration wizard's photometer step once, watching for: (a) whether the
-calibration-prompt keyword match actually fires for the real prompt
-wording, (b) whether the pty-based keystroke driving works as expected
+calibration wizard's photometer step once, watching for: (a) that the
+calibration dialog shows spotread's real instruction once, (b) whether the pty-based keystroke driving works as expected
 end to end, and (c) whether measured luminance/chromaticity values are
 physically sane (e.g. white point luminance and CCT roughly match the
 panel's actual output).

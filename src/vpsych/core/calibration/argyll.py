@@ -101,7 +101,8 @@ class ArgyllReadError(RuntimeError):
 # first and only vary the secondary (Lab/Yxy/LCh/Yuv) representation after
 # it -- so this module never needs those flags: it parses XYZ directly and
 # derives xy chromaticity itself (see `SpotReading.xy`).
-_RESULT_RE = re.compile(r"XYZ:\s*(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)")
+_NUM = r"[+-]?\d+\.?\d*(?:[eE][+-]?\d+)?"
+_RESULT_RE = re.compile(rf"XYZ:\s*({_NUM})[,\s]+({_NUM})[,\s]+({_NUM})")
 
 # Captured verbatim from a real `spotread -e` run (ArgyllCMS 2.3.1) with no
 # instrument attached: "Diagnostic: Unknown, inappropriate or no instrument
@@ -109,17 +110,41 @@ _RESULT_RE = re.compile(r"XYZ:\s*(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)")
 # detected") so small wording variants across Argyll versions still match.
 _NO_INSTRUMENT_RE = re.compile(r"no instrument detected", re.IGNORECASE)
 
-# Wording for the calibration/measurement prompts is not independently
-# verifiable without the physical device (see module docstring), so these
-# are deliberately loose, keyword-based patterns rather than an exact
-# string match -- robust to the small wording differences between
-# instrument types/Argyll point releases, at the cost of only being as
-# precise as the keywords "calibrat[e/ion]" and "place instrument"/"spot to
-# be measured" actually appearing.
+# Prompt wording. The lines below come from a real ``spotread -e`` session on
+# a ColorMunki Photo (ArgyllCMS 2.3.1), as captured in the sibling ``calsuite``
+# project (``calsuite/display/backends/spotread_session.py``)::
+#
+#     Spot read needs a calibration before continuing
+#
+#     Set instrument sensor to calibration position,
+#      and then hit any key to continue,
+#      or hit Esc or Q to abort:          <- no trailing newline; repeats until the dial is right
+#     Calibration complete
+#
+#     Place instrument on spot to be measured,
+#     and hit [A-Z] to read white and setup FWA compensation ...
+#     Hit ESC or Q to exit, instrument switch or any other key to take a reading:   <- no newline
+#      Result is XYZ: 6.322786 5.570381 2.072769, D50 Lab: 28.30 10.67 17.80
+#
+# Several of those lines mention "calibrat", but only the first few belong
+# to a prompt that needs a human; "Calibration complete" is the all-clear.
+# The other patterns stay loose (keyword based) so other instruments and
+# Argyll releases still classify.
+_CALIBRATION_DONE_RE = re.compile(r"calibration complete", re.IGNORECASE)
 _CALIBRATION_RE = re.compile(r"calibrat", re.IGNORECASE)
+#: The line that ends a calibration prompt: everything the human has to read
+#: has been printed by the time this appears (the ``Esc or Q to abort:`` text
+#: after it has no newline, so it is not waited for).
+_CALIBRATION_CONTINUE_RE = re.compile(r"any key to continue", re.IGNORECASE)
+_READY_PROMPT_RE = re.compile(r"take a reading", re.IGNORECASE)
 _MEASURE_PROMPT_RE = re.compile(
-    r"place instrument|spot to be measured|hit.{0,20}key.{0,20}(read|measur)", re.IGNORECASE
+    r"place instrument|spot to be measured|take a reading|hit.{0,20}key.{0,20}(read|measur)",
+    re.IGNORECASE,
 )
+#: Prompts ``spotread`` leaves *without* a trailing newline while it waits for
+#: a key. A line-based reader would otherwise not see them until the next
+#: output arrives.
+_UNTERMINATED_PROMPT_RE = re.compile(r"(take a reading|to abort):\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -195,6 +220,8 @@ def classify_line(line: str) -> LineClass:
         return "no_instrument"
     if _RESULT_RE.search(line):
         return "result"
+    if _CALIBRATION_DONE_RE.search(line):
+        return "other"
     if _CALIBRATION_RE.search(line):
         return "calibration_prompt"
     if _MEASURE_PROMPT_RE.search(line):
@@ -244,6 +271,38 @@ def _run_probe(args: Sequence[str], timeout_s: float) -> subprocess.CompletedPro
     return subprocess.run(list(args), input="", capture_output=True, text=True, timeout=timeout_s)
 
 
+# ``spotread -?`` prints its usage text, whose port list names each USB
+# instrument it found first (real output, ArgyllCMS 2.3.1, via calsuite)::
+#
+#     1 = '/dev/bus/usb/003/008 (X-Rite ColorMunki)'
+#     2 = '/dev/ttyS0'
+#
+# Serial ports have no parenthesised name, so a match means a real instrument.
+# Unlike ``spotread -e`` this never opens the instrument.
+_PORT_LIST_RE = re.compile(r"^\s*1 = '.*?\((.+?)\)'\s*$", re.MULTILINE)
+
+
+def identify_instrument(
+    timeout_s: float = 15.0,
+    runner: Callable[[Sequence[str], float], subprocess.CompletedProcess[str]] | None = None,
+) -> str | None:
+    """Name of the instrument ``spotread`` would use by default (port 1), or ``None``.
+
+    Reads it from the port list in ``spotread -?`` (e.g. ``"X-Rite ColorMunki"``);
+    no serial number is included in that line. ``None`` if ``spotread`` is
+    missing, times out, or lists no named USB instrument.
+    """
+    if not spotread_available():
+        return None
+    run = runner or _run_probe
+    try:
+        proc = run([SPOTREAD_BIN, "-?"], timeout_s)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    match = _PORT_LIST_RE.search((proc.stdout or "") + "\n" + (proc.stderr or ""))
+    return match.group(1).strip() if match else None
+
+
 def detect_instrument(
     timeout_s: float = 5.0,
     runner: Callable[[Sequence[str], float], subprocess.CompletedProcess[str]] | None = None,
@@ -255,13 +314,14 @@ def detect_instrument(
     ever reaches an interactive prompt -- confirmed against a real run of
     ArgyllCMS 2.3.1 with no ColorMunki plugged in (see
     ``tests/core/test_calibration_argyll.py`` for the captured fixture).
-    With an instrument attached, ``spotread`` instead blocks at its first
-    interactive prompt waiting for a keystroke; since this probe gives it
-    closed stdin, that shows up as either a timeout (treated here as "likely
-    available") or process exit without the "no instrument" diagnostic. This
-    distinction should be re-verified once the ColorMunki is physically
-    available (see docs/CALIBRATION.md); it has not been exercised against
-    real hardware in this build.
+    A named USB instrument in the ``spotread -?`` port list is checked first
+    (see :func:`identify_instrument`); that never opens the instrument. Only
+    if it finds none does this fall back to the ``-e`` probe: with an
+    instrument attached, ``spotread`` blocks at its first interactive prompt
+    waiting for a keystroke; since the probe gives it closed stdin, that
+    shows up as either a timeout (treated here as "likely available") or
+    process exit without the "no instrument" diagnostic. That fallback
+    distinction has not been exercised against real hardware in this build.
 
     Args:
         timeout_s: How long to wait for the probe process before assuming
@@ -280,6 +340,9 @@ def detect_instrument(
             "ArgyllCMS 'spotread' was not found on PATH. Install ArgyllCMS "
             "(see docs/CALIBRATION.md) to use a photometer for grade-A calibration.",
         )
+    name = identify_instrument(runner=runner)
+    if name is not None:
+        return InstrumentDetectionResult(True, f"spotread found an instrument: {name}.")
     run = runner or _run_probe
     try:
         proc = run([SPOTREAD_BIN, "-e"], timeout_s)
@@ -309,9 +372,8 @@ class SpotreadProtocol:
     keystrokes via an injected ``send_key`` callable. This indirection is
     what makes the whole interaction logic unit-testable
     (``tests/core/test_calibration_argyll.py``) with canned line sequences
-    and no real ``spotread`` process -- only :class:`ArgyllSpotreadSession`
-    (below) supplies the real, untested-by-necessity pty-backed versions of
-    these two callables.
+    and no real ``spotread`` process -- :class:`ArgyllSpotreadSession`
+    (below) supplies the real pty-backed versions of these two callables.
     """
 
     def __init__(
@@ -333,10 +395,46 @@ class SpotreadProtocol:
         self._send_key = send_key
         self._max_lines = max_lines_per_prompt
         self._ready_to_measure = False
+        self._pushback: list[str] = []
+        #: Text of a calibration prompt that appeared *after* a reading
+        #: (bumped dial, the instrument's own switch): raised by the next
+        #: `wait_for_ready()` instead of sending a key into it.
+        self._pending_calibration: str | None = None
 
-    def _pump_until(self, target: LineClass) -> str:
+    def _read_line(self) -> str | None:
+        if self._pushback:
+            return self._pushback.pop()
+        return self._next_line()
+
+    def _gather_calibration_prompt(self, first_line: str) -> str:
+        """Collect a whole calibration prompt, starting from its first line.
+
+        A real prompt spans several lines ("needs a calibration", "set the
+        sensor to the calibration position", "hit any key to continue"), and
+        several of them mention calibration; raising on each would show the
+        human one dialog per line -- and confirming a dialog sends a key,
+        which must only happen once the human has seen the instruction.
+        """
+        lines = [first_line.strip()]
         for _ in range(self._max_lines):
-            line = self._next_line()
+            if _CALIBRATION_CONTINUE_RE.search(lines[-1]):
+                break
+            line = self._read_line()
+            if line is None:
+                break
+            if line.strip():
+                lines.append(line.strip())
+        return "\n".join(lines)
+
+    def _pump_until(self, target: LineClass, fail_on_ready: bool = False) -> str:
+        """Read lines until one of class `target`.
+
+        With `fail_on_ready`, spotread returning to its idle "take a reading"
+        prompt first means the attempt ended without a result (a misread),
+        which is reported at once instead of after the read timeout.
+        """
+        for _ in range(self._max_lines):
+            line = self._read_line()
             if line is None:
                 raise ArgyllReadError(
                     "spotread exited/closed its output before producing a recognizable line."
@@ -348,12 +446,47 @@ class SpotreadProtocol:
                     f"(spotread said: {line.strip()!r})."
                 )
             if cls == "calibration_prompt":
-                raise ArgyllCalibrationRequiredError(line.strip())
+                raise ArgyllCalibrationRequiredError(self._gather_calibration_prompt(line))
             if cls == target:
                 return line
+            if fail_on_ready and _READY_PROMPT_RE.search(line):
+                raise ArgyllReadError(
+                    "spotread returned to its ready prompt without a reading (a misread?)."
+                )
         raise ArgyllReadError(
             f"spotread did not reach a {target!r} prompt within {self._max_lines} lines."
         )
+
+    def _settle(self) -> None:
+        """Consume the rest of the prompt text up to spotread's idle "take a reading" prompt.
+
+        Without this, the next key could be sent while spotread is still
+        mid-reading (and be swallowed), and leftover lines from this
+        prompt would be read as if they belonged to the next one. If a
+        calibration prompt shows up instead (a reading that succeeded and
+        then asked to be recalibrated) it is remembered for the next
+        `wait_for_ready()`. Lines that belong to a later step (a result,
+        a "no instrument" diagnostic) are pushed back untouched. Running
+        out of output or time here is not an error: the next read reports
+        it if it persists.
+        """
+        for _ in range(self._max_lines):
+            try:
+                line = self._read_line()
+            except ArgyllReadError:
+                return
+            if line is None:
+                return
+            cls = classify_line(line)
+            if _READY_PROMPT_RE.search(line):
+                return
+            if cls == "calibration_prompt":
+                self._pending_calibration = self._gather_calibration_prompt(line)
+                self._ready_to_measure = False
+                return
+            if cls in ("result", "no_instrument"):
+                self._pushback.append(line)
+                return
 
     def wait_for_ready(self) -> None:
         """Consume startup output up to the first measurement prompt.
@@ -364,10 +497,15 @@ class SpotreadProtocol:
                 instrument has been positioned as instructed.
             ArgyllNotAvailableError: If spotread reports no instrument.
         """
+        if self._pending_calibration is not None:
+            text, self._pending_calibration = self._pending_calibration, None
+            raise ArgyllCalibrationRequiredError(text)
         if self._ready_to_measure:
             return
         self._pump_until("measure_prompt")
-        self._ready_to_measure = True
+        self._settle()
+        if self._pending_calibration is None:
+            self._ready_to_measure = True
 
     def confirm_calibration(self) -> None:
         """Send a keystroke to complete a pending calibration step.
@@ -378,28 +516,40 @@ class SpotreadProtocol:
 
         Raises:
             ArgyllCalibrationRequiredError: If another calibration prompt
-                follows (e.g. a multi-step calibration sequence) -- call
-                this method again once positioned as newly instructed.
+                follows (e.g. the dial was not in the right position, or a
+                multi-step calibration sequence) -- call this method again
+                once positioned as newly instructed.
             ArgyllNotAvailableError: If spotread reports no instrument.
         """
         self._send_key(" ")
         self._pump_until("measure_prompt")
+        self._settle()
+        if self._pending_calibration is not None:
+            text, self._pending_calibration = self._pending_calibration, None
+            raise ArgyllCalibrationRequiredError(text)
         self._ready_to_measure = True
 
     def read_patch(self) -> SpotReading:
         """Trigger one measurement and return the parsed reading.
 
+        A reading is returned even if spotread asks to be recalibrated right
+        after it; the request is raised by the *next* call instead of being
+        lost (or answered with a stray key).
+
         Raises:
             ArgyllCalibrationRequiredError: If a calibration prompt is
-                encountered (first reading of a session that needs one).
+                encountered (first reading of a session that needs one, or
+                one requested after the previous reading).
             ArgyllNotAvailableError: If spotread reports no instrument.
             ArgyllReadError: If spotread's output cannot be parsed as a
                 reading within the line budget.
         """
         self.wait_for_ready()
         self._send_key(" ")
-        line = self._pump_until("result")
-        return parse_result_line(line)
+        line = self._pump_until("result", fail_on_ready=True)
+        reading = parse_result_line(line)
+        self._settle()
+        return reading
 
     def quit(self) -> None:
         """Best-effort: send spotread's quit key. Never raises."""
@@ -410,9 +560,10 @@ class SpotreadProtocol:
 class ArgyllSpotreadSession:
     """A real, pty-backed ``spotread`` session driving :class:`SpotreadProtocol`.
 
-    Not exercised by the automated test suite -- it needs the real
-    ``spotread`` binary attached to a real pseudo-terminal, and (for a full
-    read) real hardware. See the module docstring for why a pty is used
+    Exercised in ``tests/core/test_calibration_argyll_session.py`` over a real
+    pty against a fake ``spotread`` script that replays a real ColorMunki
+    transcript; never against the real binary or hardware in this build. See
+    the module docstring for why a pty is used
     instead of plain pipes, and :class:`SpotreadProtocol` for the
     interaction logic this class delegates to (which *is* fully unit
     tested).
@@ -462,11 +613,16 @@ class ArgyllSpotreadSession:
 
         Raises:
             ArgyllNotAvailableError: If `spotread` is not on `PATH`, or
-                reports no instrument.
+                reports no instrument. The session is closed first.
+            ArgyllReadError: If `spotread` produces no usable output in time
+                or exits. The session is closed first.
             ArgyllCalibrationRequiredError: If the instrument needs a
-                calibration step before its first reading; call
-                `confirm_calibration()` once positioned as instructed.
+                calibration step before its first reading. The session stays
+                open: call `confirm_calibration()` once positioned as
+                instructed (and `close()` if the user gives up).
         """
+        if self._proc is not None:
+            raise RuntimeError("open() called on a session that is already open")
         if not spotread_available():
             raise ArgyllNotAvailableError(
                 "ArgyllCMS 'spotread' was not found on PATH. Install ArgyllCMS "
@@ -483,11 +639,25 @@ class ArgyllSpotreadSession:
                 stderr=subprocess.STDOUT,
                 close_fds=True,
             )
+        except BaseException:
+            os.close(master_fd)
+            raise
         finally:
             os.close(slave_fd)
         self._master_fd = master_fd
         self._protocol = SpotreadProtocol(self._next_line, self._send_key)
-        self._protocol.wait_for_ready()
+        try:
+            self._protocol.wait_for_ready()
+        except ArgyllCalibrationRequiredError:
+            # Expected: the caller shows the prompt and calls confirm_calibration(),
+            # so the session has to stay alive.
+            raise
+        except BaseException:
+            # Any other failure (no instrument, timeout, spotread exited) leaves
+            # nothing usable: don't strand the process and pty, which can keep
+            # the instrument claimed.
+            self.close()
+            raise
 
     def confirm_calibration(self) -> None:
         """See `SpotreadProtocol.confirm_calibration`."""
@@ -506,7 +676,11 @@ class ArgyllSpotreadSession:
         if self._proc is not None:
             with contextlib.suppress(Exception):
                 self._proc.terminate()
-                self._proc.wait(timeout=5.0)
+                try:
+                    self._proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait(timeout=5.0)
         if self._master_fd is not None:
             with contextlib.suppress(OSError):
                 os.close(self._master_fd)
@@ -528,8 +702,14 @@ class ArgyllSpotreadSession:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ArgyllReadError("Timed out waiting for spotread output.")
-            ready, _, _ = select.select([self._master_fd], [], [], min(remaining, 1.0))
+            quiet_s = 0.2 if _UNTERMINATED_PROMPT_RE.search(self._buffer) else 1.0
+            ready, _, _ = select.select([self._master_fd], [], [], min(remaining, quiet_s))
             if not ready:
+                # Quiet, and what's buffered is a prompt spotread leaves without
+                # a newline while it waits for a key: hand it over as a line.
+                if _UNTERMINATED_PROMPT_RE.search(self._buffer):
+                    line, self._buffer = self._buffer, ""
+                    return line
                 continue
             try:
                 chunk = os.read(self._master_fd, 4096)
@@ -574,33 +754,3 @@ class ArgyllSpotreadPhotometer:
         """Like `measure_luminance_cdm2`, but returns the full XYZ reading."""
         del channel, level
         return self._session.read_patch()
-
-
-def open_argyll_photometer(
-    instrument: InstrumentKind = "spectrometer",
-    display_technology: DisplayTechnology | None = "l",
-) -> ArgyllSpotreadPhotometer:
-    """Open a live Argyll ``spotread``-backed photometer.
-
-    Args:
-        instrument: `"spectrometer"` (ColorMunki Photo) or `"colorimeter"`
-            (ColorMunki Display). See `ArgyllSpotreadSession`.
-        display_technology: `"l"` (LCD, default) or `"c"` (CRT); ignored
-            for a spectrometer.
-
-    Returns:
-        A ready-to-read `ArgyllSpotreadPhotometer` (its session is already
-        open and past any calibration step that didn't require a prompt).
-
-    Raises:
-        ArgyllNotAvailableError: If `spotread` is missing or no instrument
-            is attached.
-        ArgyllCalibrationRequiredError: If the instrument needs a
-            calibration step before its first reading (typically
-            ColorMunki Photo). Catch this, show `prompt_text` to the user,
-            have them position the instrument as instructed, and call
-            `photometer.session.confirm_calibration()` before reading.
-    """
-    session = ArgyllSpotreadSession(instrument=instrument, display_technology=display_technology)
-    session.open()
-    return ArgyllSpotreadPhotometer(session)
