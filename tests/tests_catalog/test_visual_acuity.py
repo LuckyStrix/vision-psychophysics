@@ -117,13 +117,13 @@ def test_response_keys_8afc_are_numpad_only() -> None:
     test = _make_test(n_orientations=8)
     keys = test.response_keys()
     assert len(keys) == 8
-    assert set(keys) == {"num1", "num2", "num3", "num4", "num6", "num7", "num8", "num9"}
+    assert set(keys) == {"num_1", "num_2", "num_3", "num_4", "num_6", "num_7", "num_8", "num_9"}
 
 
 def test_response_keys_4afc_include_arrows_and_numpad() -> None:
     test = _make_test(n_orientations=4)
     keys = set(test.response_keys())
-    assert {"up", "down", "left", "right", "num2", "num4", "num6", "num8"} == keys
+    assert {"up", "down", "left", "right", "num_2", "num_4", "num_6", "num_8"} == keys
 
 
 def test_simulated_response_returns_correct_or_a_valid_alternative() -> None:
@@ -536,7 +536,7 @@ def test_display_smoke_two_trials() -> None:
                 "block": "main",
                 "is_catch": False,
                 "trial_index": 0,
-                "keyboard": _FakeKeyboard("num8"),
+                "keyboard": _FakeKeyboard("num_8"),
                 "simulated_observer": None,
             }
             presented = test.present(win, intensity, trial_ctx)

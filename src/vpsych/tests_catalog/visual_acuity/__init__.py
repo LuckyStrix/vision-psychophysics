@@ -78,20 +78,20 @@ from vpsych.tests_catalog.visual_acuity.optotype import (
 #: layout of a standard numeric keypad (8 = up, 2 = down, 4 = left, 6 =
 #: right, and the four diagonals at the corners).
 KEY_BY_ANGLE_8: dict[int, str] = {
-    0: "num6",
-    45: "num9",
-    90: "num8",
-    135: "num7",
-    180: "num4",
-    225: "num1",
-    270: "num2",
-    315: "num3",
+    0: "num_6",
+    45: "num_9",
+    90: "num_8",
+    135: "num_7",
+    180: "num_4",
+    225: "num_1",
+    270: "num_2",
+    315: "num_3",
 }
 
 #: For 4AFC, both the 4 cardinal numpad keys and the 4 arrow keys are
 #: accepted (per the Phase 2A task: "also arrow keys for the 4 cardinal
 #: directions if the orientation count is set to 4").
-KEY_BY_ANGLE_4: dict[int, str] = {0: "num6", 90: "num8", 180: "num4", 270: "num2"}
+KEY_BY_ANGLE_4: dict[int, str] = {0: "num_6", 90: "num_8", 180: "num_4", 270: "num_2"}
 ARROW_KEY_BY_ANGLE_4: dict[int, str] = {0: "right", 90: "up", 180: "left", 270: "down"}
 
 #: `questplus`'s log10-scale Weibull slope is the classic Weibull "beta" shape
