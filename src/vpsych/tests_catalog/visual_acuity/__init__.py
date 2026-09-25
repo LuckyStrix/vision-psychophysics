@@ -352,7 +352,10 @@ class VisualAcuityTest(PsychophysicalTest):
         )
         return visual.ImageStim(
             win,
-            image=texture,
+            # render_landolt_c returns rows top-first, but PsychoPy/OpenGL treats
+            # array row 0 as the bottom of the texture; flip so the gap appears
+            # at the orientation the numpad mapping expects.
+            image=np.flipud(texture),
             size=(texture_size_px, texture_size_px),
             units="pix",
             interpolate=True,

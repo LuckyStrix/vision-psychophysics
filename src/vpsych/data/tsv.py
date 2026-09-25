@@ -75,7 +75,8 @@ def read_trials_tsv(path: str | Path) -> pd.DataFrame:
 
     for col in _INT_COLUMNS:
         if col in df.columns:
-            df[col] = df[col].astype(int)
+            # Python ints, object dtype: rng_seed is a 128-bit value that overflows int64.
+            df[col] = df[col].map(int).astype("object" if col == "rng_seed" else int)
 
     for col in _BOOL_COLUMNS:
         if col in df.columns:

@@ -109,3 +109,13 @@ def test_timestamp_parsed_as_datetime(tmp_path: Path) -> None:
 
     df = read_trials_tsv(path)
     assert str(df["timestamp_utc"].dtype).startswith("datetime64")
+
+
+def test_read_trials_tsv_handles_128_bit_rng_seed(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from vpsych.data.tsv import read_trials_tsv
+
+    seed = 88604842595323735875103819545477744536
+    p = tmp_path / "t.tsv"
+    p.write_text(f"run\ttrial_index\tn_dropped_frames_trial\trng_seed\n1\t0\t0\t{seed}\n")
+    df = read_trials_tsv(p)
+    assert df["rng_seed"].iloc[0] == seed

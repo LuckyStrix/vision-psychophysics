@@ -401,7 +401,8 @@ class VernierAcuityTest(PsychophysicalTest):
         texture = self._render_stimulus_texture(offset_px, direction)
         stim = visual.ImageStim(
             win,
-            image=texture,
+            # flipud: PsychoPy/OpenGL treats array row 0 as the bottom; ours is top-first.
+            image=np.flipud(texture),
             size=(self._canvas_width_px, self._canvas_height_px),
             # Whole-pixel-only jitter: keeps the ImageStim's own screen-space
             # position aligned to the physical pixel grid, so the analytically

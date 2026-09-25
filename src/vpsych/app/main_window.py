@@ -28,6 +28,7 @@ from vpsych.app.screens.results import ResultsScreen
 from vpsych.app.screens.run import RunScreen
 from vpsych.app.screens.session_builder import SessionBuilderScreen
 from vpsych.app.state import AppState
+from vpsych.data import catalog
 
 
 class MainWindow(QMainWindow):
@@ -125,4 +126,10 @@ class MainWindow(QMainWindow):
 
     def _on_run_finished(self, exit_code: object) -> None:
         del exit_code
+        # The runner subprocess writes session files but never touches the
+        # catalog index the Results screen reads, so re-index before refreshing.
+        try:
+            catalog.rebuild_catalog(self._state.data_root)
+        except Exception:
+            pass  # raw data is intact; `rebuild-catalog` in the data CLI can recover
         self.results_screen.refresh()

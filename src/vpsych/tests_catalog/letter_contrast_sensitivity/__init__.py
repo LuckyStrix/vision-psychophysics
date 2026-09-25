@@ -284,7 +284,8 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
             # convention -- see _contrast_rendering.dither_frame's docstring.
             drive = weber_drive_from_ink_mask(ink_mask, contrast, gamma_model)
             dithered = dither_frame(drive, rng)
-            image_stim.image = dithered * 2.0 - 1.0
+            # flipud: PsychoPy/OpenGL treats array row 0 as the bottom; our mask is top-first.
+            image_stim.image = np.flipud(dithered * 2.0 - 1.0)
             image_stim.draw()
             flip_time = win.flip()
             flip_times.append(flip_time)

@@ -175,7 +175,7 @@ class PresentationBackend(ABC):
 
     @abstractmethod
     def show_feedback(self, correct: bool) -> None:
-        """Briefly show correct/incorrect feedback (practice block only)."""
+        """Briefly show correct/incorrect feedback (demo and practice trials only)."""
         raise NotImplementedError
 
     @abstractmethod
@@ -622,13 +622,16 @@ class TrialLoop:
 
         # Demo trial: shown, not recorded, not scored against the procedure.
         demo_value = self.test.make_catch_trial_intensity()
-        self._present_and_build_record(
+        _, demo_correct, _ = self._present_and_build_record(
             block="practice",
             is_catch=False,
             trial_index=0,
             value=demo_value,
             updates_procedure=False,
         )
+        # Feedback on the demo too, so it is consistent across the whole
+        # demo + practice stretch (previously only the practice trials had it).
+        self.backend.show_feedback(demo_correct)
 
         # Practice block: recorded, feedback shown, procedure NOT updated.
         self._write_status("practice", n_trials_expected=self.config.n_practice_trials)
@@ -649,6 +652,12 @@ class TrialLoop:
             self.backend.show_feedback(correct)
             self._write_status(
                 "practice", trial_index=i, n_trials_expected=self.config.n_practice_trials
+            )
+
+        if self.config.n_practice_trials > 0:
+            self.backend.show_message(
+                "Practice is over. From here on you will not be told whether each answer "
+                "was correct."
             )
 
         # Main block.

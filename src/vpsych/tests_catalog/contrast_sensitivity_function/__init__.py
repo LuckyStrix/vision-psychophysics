@@ -388,7 +388,9 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
             # contrast resolution improves with n_frames.
             drive = michelson_drive_from_pattern(windowed_pattern, frame_contrast, gamma_model)
             dithered = dither_frame(drive, rng)
-            image_stim.image = dithered * 2.0 - 1.0  # [0,1] -> [-1,1] for colorSpace="rgb"
+            # [0,1] -> [-1,1] for colorSpace="rgb"; flipud because PsychoPy/OpenGL treats
+            # array row 0 as the bottom, while our patterns are built top-row-first.
+            image_stim.image = np.flipud(dithered * 2.0 - 1.0)
             image_stim.draw()
             flip_time = win.flip()
             flip_times.append(flip_time)
