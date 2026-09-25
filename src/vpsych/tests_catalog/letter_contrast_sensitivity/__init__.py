@@ -290,9 +290,10 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
             flip_times.append(flip_time)
             if frame == 0:
                 onset_s = flip_time
-            keys = keyboard.getKeys(keyList=self.response_keys(), timeStamped=True)
+                keyboard.clock.reset()
+            keys = keyboard.getKeys(keyList=self.response_keys(), waitRelease=False)
             if keys:
-                response, rt_s = keys[0][0], keys[0][1] - (onset_s or 0.0)
+                response, rt_s = keys[0].name, keys[0].rt
                 break
 
         for _ in range(timeline.iti_frames):

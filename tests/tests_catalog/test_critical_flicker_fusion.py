@@ -664,7 +664,6 @@ def test_summarize_bias_and_coverage_over_many_simulated_runs(
 @pytest.mark.display
 def test_display_smoke_two_trials() -> None:
     """Runs 2 real trials through a real PsychoPy window with a fake keyboard."""
-    from psychopy import core as psychopy_core
     from psychopy import visual
 
     from vpsych.core.timing import measure_refresh
@@ -693,15 +692,25 @@ def test_display_smoke_two_trials() -> None:
             # Method/argument names match psychopy.hardware.keyboard.Keyboard's
             # real API exactly (present() calls these directly), not this
             # project's own naming convention.
+            class clock:  # noqa: N801
+                @staticmethod
+                def reset() -> None:
+                    pass
+
             def clearEvents(self) -> None:  # noqa: N802
                 pass
 
             def waitKeys(  # noqa: N802
                 self,
                 keyList: list[str],  # noqa: N803
-                timeStamped: bool,  # noqa: N803
-            ) -> list[tuple[str, float]]:
-                return [(keyList[0], psychopy_core.getTime())]
+                waitRelease: bool,  # noqa: N803
+                clear: bool,
+            ) -> list[Any]:
+                class _Key:
+                    name = keyList[0]
+                    rt = 0.3
+
+                return [_Key()]
 
         timeline = TrialTimeline(
             fixation_frames=5, stimulus_frames=display.frames_for_ms(150.0), iti_frames=5

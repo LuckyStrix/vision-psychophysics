@@ -394,11 +394,14 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
             flip_times.append(flip_time)
             if frame == 0:
                 onset_s = flip_time
+                keyboard.clock.reset()
 
         response_timeout_frames = timeline.response_timeout_frames or 1
         max_wait_s = response_timeout_frames / self.display.refresh_hz
-        keys = keyboard.waitKeys(maxWait=max_wait_s, keyList=self.response_keys(), timeStamped=True)
-        response, rt_s = (keys[0][0], keys[0][1] - (onset_s or 0.0)) if keys else (None, None)
+        keys = keyboard.waitKeys(
+            maxWait=max_wait_s, keyList=self.response_keys(), waitRelease=False, clear=False
+        )
+        response, rt_s = (keys[0].name, keys[0].rt) if keys else (None, None)
 
         for _ in range(timeline.iti_frames):
             win.flip()

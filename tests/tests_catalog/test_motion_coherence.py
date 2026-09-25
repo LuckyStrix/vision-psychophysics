@@ -445,21 +445,29 @@ def test_display_smoke_two_trials() -> None:
         )
         test.build_stimuli(win)
 
-        from psychopy import core as psychopy_core
-
         class _FakeKeyboard:
             # Method/argument names match psychopy.hardware.keyboard.Keyboard's
             # real API exactly (present() calls these directly), not this
             # project's own naming convention.
+            class clock:  # noqa: N801
+                @staticmethod
+                def reset() -> None:
+                    pass
+
             def clearEvents(self) -> None:  # noqa: N802
                 pass
 
             def waitKeys(  # noqa: N802
                 self,
                 keyList: list[str],  # noqa: N803
-                timeStamped: bool,  # noqa: N803
-            ) -> list[tuple[str, float]]:
-                return [(keyList[0], psychopy_core.getTime())]
+                waitRelease: bool,  # noqa: N803
+                clear: bool,
+            ) -> list[Any]:
+                class _Key:
+                    name = keyList[0]
+                    rt = 0.3
+
+                return [_Key()]
 
         from vpsych.core.trial import TrialTimeline
 

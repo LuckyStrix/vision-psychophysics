@@ -722,6 +722,19 @@ def test_trivector_procedure_recovery_bias_slow() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _FakeClock:
+    def reset(self) -> None:
+        pass
+
+
+class _FakeKeyPress:
+    """Mimics psychopy.hardware.keyboard.KeyPress: `.name` and onset-relative `.rt`."""
+
+    def __init__(self, name: str, rt: float = 0.3) -> None:
+        self.name = name
+        self.rt = rt
+
+
 class _FakeKeyboard:
     """Minimal duck-typed stand-in for psychopy.hardware.keyboard.Keyboard, for the smoke test.
 
@@ -730,23 +743,20 @@ class _FakeKeyboard:
     `trial_ctx["keyboard"]` is.
     """
 
+    clock = _FakeClock()
+
     def clearEvents(self) -> None:  # noqa: N802
         pass
 
     def waitKeys(  # noqa: N802
         self,
         keyList: list[str] | None = None,  # noqa: N803
-        timeStamped: bool = True,  # noqa: N803
+        waitRelease: bool = True,  # noqa: N803
+        clear: bool = True,
     ) -> list[Any]:
-        del keyList, timeStamped
-        # Use PsychoPy's own global clock (the same one win.flip() timestamps
-        # come from) so the fabricated "keypress" timestamp is always after
-        # the stimulus-onset flip time, giving a non-negative rt_s -- a bare
-        # 0.0 here would (correctly) fail PresentedTrial's rt_s >= 0
-        # validation once run alongside a real window's monotonic clock.
-        from psychopy.core import getTime
-
-        return [("up", getTime())]
+        del keyList, waitRelease, clear
+        # `rt` is onset-relative, as the real Keyboard's clock is reset at onset.
+        return [_FakeKeyPress("up")]
 
 
 @pytest.mark.display

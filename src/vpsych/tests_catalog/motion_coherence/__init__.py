@@ -349,9 +349,10 @@ class MotionCoherenceTest(PsychophysicalTest):
             flip_times.append(flip_time)
             if frame == 0:
                 onset_s = flip_time
+                keyboard.clock.reset()
 
-        keys = keyboard.waitKeys(keyList=["left", "right"], timeStamped=True)
-        response, rt_s = (keys[0][0], keys[0][1] - (onset_s or 0.0)) if keys else (None, None)
+        keys = keyboard.waitKeys(keyList=["left", "right"], waitRelease=False, clear=False)
+        response, rt_s = (keys[0].name, keys[0].rt) if keys else (None, None)
 
         for _ in range(timeline.iti_frames):
             win.flip()

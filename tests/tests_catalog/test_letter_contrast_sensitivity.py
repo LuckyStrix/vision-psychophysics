@@ -374,18 +374,30 @@ def test_threshold_criterion_is_not_75_percent_point() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _FakeClock:
+    def reset(self) -> None:
+        pass
+
+
+class _FakeKeyPress:
+    """Mimics psychopy.hardware.keyboard.KeyPress: `.name` and onset-relative `.rt`."""
+
+    def __init__(self, name: str, rt: float = 0.3) -> None:
+        self.name = name
+        self.rt = rt
+
+
 class _FakeKeyboard:
     """Stands in for `psychopy.hardware.keyboard.Keyboard`: returns a canned key instantly.
 
-    Timestamps use `psychopy.core.getTime()` (the same monotonic clock
-    `win.flip()` timestamps come from), not an arbitrary constant -- see
-    `test_contrast_sensitivity_function.py::_FakeKeyboard`'s docstring for
-    why that matters for `rt_s`.
+    Returns KeyPress-like objects (`.name`, onset-relative `.rt`), like the real Keyboard.
     """
 
     def __init__(self, key: str) -> None:
         self._key = key
         self._returned = False
+
+    clock = _FakeClock()
 
     def clearEvents(self) -> None:  # noqa: N802
         self._returned = False
@@ -393,14 +405,13 @@ class _FakeKeyboard:
     def getKeys(  # noqa: N802
         self,
         keyList: list[str] | None = None,  # noqa: N803
-        timeStamped: bool = True,  # noqa: N803
-    ) -> list[tuple[str, float]]:
+        waitRelease: bool = True,  # noqa: N803
+        clear: bool = True,
+    ) -> list[_FakeKeyPress]:
         if self._returned:
             return []
         self._returned = True
-        from psychopy import core
-
-        return [(self._key, core.getTime())]
+        return [_FakeKeyPress(self._key)]
 
 
 @pytest.mark.display
