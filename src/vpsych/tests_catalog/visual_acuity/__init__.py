@@ -427,6 +427,7 @@ class VisualAcuityTest(PsychophysicalTest):
             if frame == 0:
                 onset_s = flip_time
                 keyboard.clearEvents()
+                keyboard.clock.reset()
             keys = keyboard.getKeys(keyList=accepted_keys, waitRelease=False)
             if keys:
                 response_key = keys[0].name

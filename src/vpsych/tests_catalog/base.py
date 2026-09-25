@@ -35,6 +35,11 @@ Domain = Literal["acuity", "contrast", "color", "motion", "temporal", "hyperacui
 _GRADE_RANK: dict[str, int] = {"A": 0, "B": 1, "C": 2}
 
 
+#: Longest a self-paced `keyboard.waitKeys` response wait may last, in seconds,
+#: for tests without their own response-timeout parameter; a timeout scores as no response.
+MAX_RESPONSE_WAIT_S = 30.0
+
+
 class TestRequirements(BaseModel):
     """Prerequisites a test needs from the active display and calibration.
 

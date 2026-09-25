@@ -111,6 +111,7 @@ from vpsych.core.timing import presentation_timing
 from vpsych.data.quality import check_threshold_at_range_edge, compute_quality_flags
 from vpsych.data.schemas import QualityFlag, TestSummary
 from vpsych.tests_catalog.base import (
+    MAX_RESPONSE_WAIT_S,
     PresentedTrial,
     PsychophysicalTest,
     TestRequirements,
@@ -592,7 +593,9 @@ class ColorDiscriminationTest(PsychophysicalTest):
                 onset_s = flip_time
                 keyboard.clock.reset()
 
-        keys = keyboard.waitKeys(keyList=RESPONSE_KEYS, waitRelease=False, clear=False)
+        keys = keyboard.waitKeys(
+            maxWait=MAX_RESPONSE_WAIT_S, keyList=RESPONSE_KEYS, waitRelease=False, clear=False
+        )
         response, rt_s = (keys[0].name, keys[0].rt) if keys else (None, None)
 
         for _ in range(iti_frames):

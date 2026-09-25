@@ -170,7 +170,9 @@ def test_render_landolt_c_gap_faces_requested_orientation() -> None:
 def test_render_landolt_c_weber_contrast_sets_stroke_level() -> None:
     tex = render_landolt_c(64, gap_px=8.0, orientation_deg=90.0, supersample=4)
     assert tex.max() == pytest.approx(1.0)
-    assert tex.min() == pytest.approx(1.0 + (-0.99), abs=1e-6)
+    # PsychoPy [-1, 1] scale: luminance fraction 1 + weber (0.01) is 1 + 2*weber (-0.98).
+    assert tex.min() == pytest.approx(1.0 + 2.0 * -0.99, abs=1e-6)
+    assert tex.min() < -0.9
 
 
 def test_min_renderable_logmar_matches_gap_px_conversion() -> None:
@@ -487,6 +489,11 @@ class _FakeKeyboard:
     def __init__(self, key_name: str) -> None:
         self._key_name = key_name
         self._armed = True
+
+    class clock:  # noqa: N801 -- mimics Keyboard.clock
+        @staticmethod
+        def reset() -> None:
+            pass
 
     def clearEvents(self) -> None:  # noqa: N802 -- mimics psychopy.hardware.keyboard.Keyboard
         self._armed = True

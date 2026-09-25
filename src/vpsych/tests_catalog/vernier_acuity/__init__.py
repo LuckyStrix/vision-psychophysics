@@ -308,7 +308,8 @@ class VernierAcuityTest(PsychophysicalTest):
         `needs_gamma_calibration=True`).
         """
         background_level = 1.0
-        foreground_level = background_level * (1.0 + self.params.weber_contrast)
+        # PsychoPy [-1, 1] scale: luminance fraction L/L_bg = 1 + weber maps to 1 + 2*weber.
+        foreground_level = 1.0 + 2.0 * self.params.weber_contrast
         center_x = self._canvas_width_px / 2.0
         top_y_start = self._canvas_height_px / 2.0 - self._gap_px / 2.0 - self._length_px
         top_y_end = self._canvas_height_px / 2.0 - self._gap_px / 2.0
@@ -420,6 +421,7 @@ class VernierAcuityTest(PsychophysicalTest):
             if frame == 0:
                 onset_s = flip_time
                 keyboard.clearEvents()
+                keyboard.clock.reset()
 
         response_key: str | None = None
         rt_s: float | None = None

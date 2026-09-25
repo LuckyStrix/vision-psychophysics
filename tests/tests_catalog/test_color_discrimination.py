@@ -750,11 +750,12 @@ class _FakeKeyboard:
 
     def waitKeys(  # noqa: N802
         self,
+        maxWait: float | None = None,  # noqa: N803
         keyList: list[str] | None = None,  # noqa: N803
         waitRelease: bool = True,  # noqa: N803
         clear: bool = True,
     ) -> list[Any]:
-        del keyList, waitRelease, clear
+        del maxWait, keyList, waitRelease, clear
         # `rt` is onset-relative, as the real Keyboard's clock is reset at onset.
         return [_FakeKeyPress("up")]
 

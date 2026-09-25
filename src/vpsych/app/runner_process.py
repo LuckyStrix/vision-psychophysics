@@ -107,8 +107,12 @@ class RunnerProcessController(QObject):
         """Ask the runner subprocess to terminate (SIGTERM, then SIGKILL if needed)."""
         if self._process.state() != QProcess.ProcessState.NotRunning:
             self._process.terminate()
-            if not self._process.waitForFinished(2000):
-                self._process.kill()
+            # Escalate to SIGKILL without blocking the UI thread if it ignores SIGTERM.
+            QTimer.singleShot(2000, self._kill_if_running)
+
+    def _kill_if_running(self) -> None:
+        if self._process.state() != QProcess.ProcessState.NotRunning:
+            self._process.kill()
 
     @property
     def last_status(self) -> RunnerStatus | None:

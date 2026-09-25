@@ -442,11 +442,16 @@ class _GammaStep(_PhotometerSessionMixin, QWidget):
         )
 
         prompt_text = getattr(exc, "prompt_text", str(exc))
-        QMessageBox.information(
+        choice = QMessageBox.information(
             self,
             "Instrument calibration needed",
             f"{prompt_text}\n\nPosition the instrument as instructed, then click OK.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
+        if choice == QMessageBox.StandardButton.Cancel:
+            self._release_photometer()
+            self.photometer_status_label.setText("Instrument calibration cancelled.")
+            return
         assert self._photometer_session is not None
         try:
             self._photometer_session.confirm_calibration()  # type: ignore[attr-defined]
@@ -688,11 +693,16 @@ class _ColorStep(_PhotometerSessionMixin, QWidget):
         )
 
         prompt_text = getattr(exc, "prompt_text", str(exc))
-        QMessageBox.information(
+        choice = QMessageBox.information(
             self,
             "Instrument calibration needed",
             f"{prompt_text}\n\nPosition the instrument as instructed, then click OK.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
         )
+        if choice == QMessageBox.StandardButton.Cancel:
+            self._release_photometer()
+            self.color_photometer_status_label.setText("Instrument calibration cancelled.")
+            return
         assert self._photometer_session is not None
         try:
             self._photometer_session.confirm_calibration()  # type: ignore[attr-defined]

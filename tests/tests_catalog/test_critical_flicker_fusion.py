@@ -702,6 +702,7 @@ def test_display_smoke_two_trials() -> None:
 
             def waitKeys(  # noqa: N802
                 self,
+                maxWait: float,  # noqa: N803
                 keyList: list[str],  # noqa: N803
                 waitRelease: bool,  # noqa: N803
                 clear: bool,

@@ -471,6 +471,11 @@ class _FakeKeyboard:
         self._key_name = key_name
         self._armed = True
 
+    class clock:  # noqa: N801 -- mimics Keyboard.clock
+        @staticmethod
+        def reset() -> None:
+            pass
+
     def clearEvents(self) -> None:  # noqa: N802 -- mimics psychopy.hardware.keyboard.Keyboard
         self._armed = True
 

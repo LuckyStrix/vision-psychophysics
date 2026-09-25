@@ -315,7 +315,7 @@ class PsychoPyBackend(PresentationBackend):
         while True:
             self._message_stim.draw()
             self._win.flip()
-            if self._keyboard.getKeys(keyList=["space"]):
+            if self._keyboard.getKeys(keyList=["space"], waitRelease=False):
                 return
             if self.check_abort():
                 return
@@ -328,7 +328,7 @@ class PsychoPyBackend(PresentationBackend):
             self._win.flip()
 
     def check_abort(self) -> bool:
-        if not self._keyboard.getKeys(keyList=["escape"]):
+        if not self._keyboard.getKeys(keyList=["escape"], waitRelease=False):
             return False
         from psychopy import gui
 

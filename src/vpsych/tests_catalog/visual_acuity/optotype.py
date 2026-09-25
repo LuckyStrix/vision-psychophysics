@@ -164,7 +164,7 @@ def render_landolt_c(
     )
 
     background_level = 1.0
-    stroke_level = background_level * (1.0 + weber_contrast)
+    stroke_level = background_level + 2.0 * weber_contrast
     result: np.ndarray = background_level + coverage * (stroke_level - background_level)
     return result
 
