@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 
 from vpsych.core.procedures.questplus_procedure import questplus_weibull_x_at_p
@@ -118,7 +117,8 @@ def psychometric_figure(summary: TestSummary, trials: pd.DataFrame) -> Figure:
         A matplotlib Figure with axes labeled with real units from summary.estimate.units.
     """
     matplotlib_use_agg()
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig = Figure(figsize=(10, 6))
+    ax = fig.subplots()
 
     # Filter to main block, exclude catch trials
     if len(trials) == 0 or "block" not in trials.columns or "is_catch" not in trials.columns:
@@ -307,7 +307,8 @@ def csf_figure(summary: TestSummary) -> Figure:
         A matplotlib Figure showing the CSF curve with credible band.
     """
     matplotlib_use_agg()
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig = Figure(figsize=(10, 6))
+    ax = fig.subplots()
 
     # Extract CSF curve data from extra
     extra = summary.estimate.extra
@@ -390,7 +391,8 @@ def history_figure(history: list[dict], task_id: str, units: str) -> Figure:
         A matplotlib Figure showing threshold history over time.
     """
     matplotlib_use_agg()
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig = Figure(figsize=(12, 6))
+    ax = fig.subplots()
 
     if not history:
         ax.text(

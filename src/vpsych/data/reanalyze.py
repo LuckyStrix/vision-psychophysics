@@ -121,9 +121,10 @@ def reanalyze_session(path: str | Path, write: bool = False) -> list[ReanalysisR
         df = read_trials_tsv(trials_path)
 
         test_cls = get_test(task_id)
-        planned = next(
-            (t for t in session_info.plan.tests if t.task_id == task_id and t.eye == eye), None
-        )
+        # Runs are numbered per task in plan order (see the runner), so the run-th planned
+        # entry for this task is the one that produced this file.
+        planned_for_task = [t for t in session_info.plan.tests if t.task_id == task_id]
+        planned = planned_for_task[run - 1] if run - 1 < len(planned_for_task) else None
         raw_params = planned.params if planned is not None else {}
         params = test_cls.spec.params_model.model_validate(raw_params)
         rng, _ = make_rng(session_info.plan.seed)

@@ -92,6 +92,35 @@ def check_dropped_frames(dropped_fraction: float) -> list[QualityFlag]:
     return []
 
 
+def check_timeouts(
+    n_timeouts: int, n_answered: int, max_fraction: float = 0.1
+) -> list[QualityFlag]:
+    """Flag a run where many main trials timed out with no response.
+
+    Args:
+        n_timeouts: Main, non-catch trials with no response (excluded from the estimate).
+        n_answered: Main, non-catch trials that were answered.
+        max_fraction: Timeout fraction above which to warn.
+
+    Returns:
+        One warning flag if timeouts exceed `max_fraction` of attempted trials, else empty.
+    """
+    total = n_timeouts + n_answered
+    if n_timeouts == 0 or n_timeouts / total <= max_fraction:
+        return []
+    return [
+        QualityFlag(
+            code="many_timeouts",
+            severity="warning",
+            message=(
+                f"{n_timeouts} of {total} trials timed out with no response and were excluded "
+                "from the estimate. The observer may have been inattentive or the response "
+                "window too short."
+            ),
+        )
+    ]
+
+
 def check_threshold_at_range_edge(
     threshold: float,
     range_min: float,
@@ -255,6 +284,7 @@ def compute_quality_flags(
     max_calibration_age_days: int = 30,
     edge_tolerance_frac: float = 0.05,
     gof_alpha: float = 0.05,
+    n_timeouts: int = 0,
 ) -> list[QualityFlag]:
     """Run every applicable quality check and return the combined flag list.
 
@@ -282,6 +312,8 @@ def compute_quality_flags(
         max_calibration_age_days: Passed through to `check_calibration_quality`.
         edge_tolerance_frac: Passed through to `check_threshold_at_range_edge`.
         gof_alpha: Passed through to `check_goodness_of_fit`.
+        n_timeouts: Non-catch main trials with no response, excluded from the estimate
+            (see `check_timeouts`; `n_trials` is taken as the answered count).
 
     Returns:
         The concatenation of every applicable check's flags, in the order
@@ -299,4 +331,6 @@ def compute_quality_flags(
     flags += check_goodness_of_fit(gof_p_value, gof_alpha)
     if n_trials is not None and min_trials is not None:
         flags += check_trial_count(n_trials, min_trials)
+    if n_timeouts:
+        flags += check_timeouts(n_timeouts, n_trials or 0)
     return flags

@@ -43,6 +43,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 from vpsych.tests_catalog.critical_flicker_fusion.waveform import (
     dft_fundamental_amplitude,
@@ -540,7 +541,7 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
         could actually test.
         """
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         # Rebuild the same intensity grid this run used from self.display
@@ -669,6 +670,7 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
             )
 
         quality_flags += compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,
@@ -694,5 +696,5 @@ class CriticalFlickerFusionTest(PsychophysicalTest):
             n_trials=len(non_catch),
             n_catch=n_catch,
             catch_lapse_rate=catch_lapse_rate,
-            analysis_version="0.1.0",
+            analysis_version="0.2.0",
         )

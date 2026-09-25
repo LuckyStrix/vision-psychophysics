@@ -99,7 +99,16 @@ class _GeometryStep(QWidget):
         self.height_cm_spin.setRange(1.0, 300.0)
         self.height_cm_spin.setValue(30.0)
         self.height_cm_spin.setSuffix(" cm")
+        # Auto-derived from width and pixel aspect ratio until the user (or an import)
+        # sets it explicitly.
+        self._height_auto = True
+        self.height_cm_spin.valueChanged.connect(self._on_height_edited)
         form.addRow("Physical screen height", self.height_cm_spin)
+        self.height_warning_label = QLabel()
+        self.height_warning_label.setWordWrap(True)
+        self.height_warning_label.setProperty("role", "caption")
+        self.height_warning_label.setVisible(False)
+        form.addRow("", self.height_warning_label)
         layout.addLayout(form)
 
         card_label = QLabel(
@@ -135,12 +144,30 @@ class _GeometryStep(QWidget):
         self.refresh_spin.setValue(refresh_hz)
         self.detect_status_label.setText("Detected from the OS.")
 
+    def _on_height_edited(self) -> None:
+        if not self._setting_height_programmatically:
+            self._height_auto = False
+        self._state.geometry.height_cm = self.height_cm_spin.value()
+        warning = self._state.geometry.height_warning()
+        self.height_warning_label.setText(warning or "")
+        self.height_warning_label.setVisible(warning is not None)
+
+    _setting_height_programmatically = False
+
     def _on_card_changed(self) -> None:
         self._state.geometry.card_width_px = self.card_widget.card_width_px
         self._state.geometry.width_px = self.width_px_spin.value()
+        self._state.geometry.height_px = self.height_px_spin.value()
         estimated = self._state.geometry.resolve_width_cm()
         if estimated is not None:
             self.width_estimate_label.setText(f"Estimated screen width: {estimated:.1f} cm")
+        derived = self._state.geometry.derived_height_cm()
+        if self._height_auto and derived is not None:
+            self._setting_height_programmatically = True
+            try:
+                self.height_cm_spin.setValue(min(max(derived, 1.0), 300.0))
+            finally:
+                self._setting_height_programmatically = False
 
     def commit(self) -> None:
         """Write this step's widget values into the shared wizard state."""
@@ -166,6 +193,7 @@ class _GeometryStep(QWidget):
         self._state.geometry.width_cm_locked = True
         self.card_widget.setEnabled(False)
         self.use_card_match_button.setVisible(True)
+        self._on_card_changed()  # refresh the derived height
         self.width_estimate_label.setText(f"Physical width imported: {width_cm:.2f} cm.")
 
     def _on_use_card_match(self) -> None:
@@ -1012,6 +1040,7 @@ class CalibrationWizardScreen(QWidget):
             QMessageBox.warning(self, "Cannot save calibration", str(exc))
             return
         save_calibration(calibration, root=self._state.data_root)
+        self._wizard_state.reset()
         self._state.refresh_calibration()
         QMessageBox.information(
             self,

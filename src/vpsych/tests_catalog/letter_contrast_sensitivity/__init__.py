@@ -65,6 +65,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 
 GUESS_RATE = 0.1  # 10AFC letter identification.
@@ -77,7 +78,7 @@ GUESS_RATE = 0.1  # 10AFC letter identification.
 #: ~89% contrast) is just short of a maximal, unmistakably-black letter.
 DEFAULT_INTENSITY_VALUES = [float(v) for v in np.linspace(-2.4, -0.05, 25)]
 DEFAULT_THRESHOLD_VALUES = [float(v) for v in np.linspace(-2.2, -0.1, 15)]
-DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.2, 1.0, 5)]
+DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.5, 6.0, 6)]
 DEFAULT_LAPSE_RATE_VALUES = [0.0, 0.02, 0.04]
 
 
@@ -212,6 +213,12 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
             return {}
         from psychopy import visual
 
+        from vpsych.tests_catalog._contrast_rendering import (
+            gamma_channel_model_from_calibration,
+            set_mean_gray_background,
+        )
+
+        set_mean_gray_background(win, gamma_channel_model_from_calibration(self.calibration.gamma))
         size_px = round(self.display.deg_to_px(self.params.letter_height_deg))
         fixation = visual.TextStim(win, text="+", height=20)
         letter_image = visual.ImageStim(win, size=(size_px, size_px), units="pix")
@@ -346,7 +353,7 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
         low/high bounds swap sign and order under negation).
         """
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         procedure = self.make_procedure()
@@ -391,6 +398,7 @@ class LetterContrastSensitivityTest(PsychophysicalTest):
         )
 
         quality_flags = compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,

@@ -76,6 +76,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 
 GUESS_RATE = 0.5  # 2AFC orientation identification.
@@ -304,6 +305,12 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
             return {}
         from psychopy import visual
 
+        from vpsych.tests_catalog._contrast_rendering import (
+            gamma_channel_model_from_calibration,
+            set_mean_gray_background,
+        )
+
+        set_mean_gray_background(win, gamma_channel_model_from_calibration(self.calibration.gamma))
         size_px = round(self.display.deg_to_px(self.params.grating_diameter_deg))
         fixation = visual.TextStim(win, text="+", height=20)
         grating_image = visual.ImageStim(win, size=(size_px, size_px), units="pix")
@@ -430,7 +437,7 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
     def _replay_procedure(self, trials: pd.DataFrame) -> QCSF:
         """Replay a fresh `QCSF` over `trials`' main, non-catch rows (see `summarize`)."""
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, _ = split_scored_trials(main)
         procedure = self.make_procedure()
         for _, row in non_catch.iterrows():
             sp = row["stimulus_params"]
@@ -453,7 +460,7 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
         `vpsych.data.reanalyze.reanalyze_session`.
         """
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         procedure = self._replay_procedure(trials)
@@ -466,6 +473,7 @@ class ContrastSensitivityFunctionTest(PsychophysicalTest):
         )
 
         quality_flags = compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,

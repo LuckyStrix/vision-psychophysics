@@ -31,3 +31,22 @@ def test_build_runner_command_with_data_root_and_simulate() -> None:
     assert str(Path("/tmp/data")) in args
     assert "--simulate" in args
     assert "always_correct" in args
+
+
+def test_failed_to_start_reports_an_error_instead_of_hanging(tmp_path: Path) -> None:
+    from PySide6.QtCore import QCoreApplication, QProcess, QTimer
+
+    from vpsych.app.runner_process import RunnerProcessController
+    from vpsych.runner.status import RunnerExitCode
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    controller = RunnerProcessController(tmp_path / "plan.json", tmp_path / "status.json")
+    controller._process.setProgram(str(tmp_path / "no-such-interpreter"))
+    codes: list[RunnerExitCode] = []
+    controller.finished.connect(codes.append)
+    QTimer.singleShot(3000, app.quit)  # safety net so a regression fails instead of hanging
+    controller.finished.connect(lambda _c: app.quit())
+    controller.start()
+    app.exec()
+    assert codes == [RunnerExitCode.ERROR]
+    assert controller._process.state() == QProcess.ProcessState.NotRunning

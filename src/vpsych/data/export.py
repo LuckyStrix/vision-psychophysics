@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import tempfile
 import zipfile
 from pathlib import Path
@@ -23,6 +24,8 @@ from vpsych.data.dataset import PARTICIPANT_COLUMN_SIDECARS
 from vpsych.data.schemas import TestSummary, export_json_schemas
 from vpsych.data.validate import ValidationReport, validate_dataset
 from vpsych.data.writer import TRIAL_COLUMN_SIDECARS
+
+log = logging.getLogger(__name__)
 
 _TIDY_COLUMNS = [
     "participant_id",
@@ -66,6 +69,7 @@ def _iter_summaries(root: Path, participant_id: str | None) -> list[tuple[str, s
                         summary_path.read_text(encoding="utf-8")
                     )
                 except Exception:
+                    log.warning("Skipping unreadable summary %s", summary_path, exc_info=True)
                     continue
                 found.append((pdir.name, sdir.name, summary))
     return found

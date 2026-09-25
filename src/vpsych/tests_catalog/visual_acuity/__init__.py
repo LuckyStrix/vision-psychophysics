@@ -66,6 +66,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 from vpsych.tests_catalog.visual_acuity.optotype import (
     landolt_c_geometry,
@@ -334,6 +335,9 @@ class VisualAcuityTest(PsychophysicalTest):
             return {}
         from psychopy import visual
 
+        # The optotype texture's background is white; match the window so the texture's
+        # square edge is not a visible luminance step against the default mid-gray.
+        win.color = 1.0
         fixation = visual.TextStim(win, text="+", height=20, color=-1.0)
         self._stims = {"fixation": fixation}
         return self._stims
@@ -489,7 +493,7 @@ class VisualAcuityTest(PsychophysicalTest):
 
     def summarize(self, trials: pd.DataFrame) -> TestSummary:
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         procedure = self.make_procedure()
@@ -502,7 +506,10 @@ class VisualAcuityTest(PsychophysicalTest):
         reported, ci_low, ci_high, target_p = self._fract_criterion_threshold(
             procedure, raw_estimate, lapse
         )
-        decimal_acuity = float(10.0 ** (-reported))
+        # A threshold below the display's smallest renderable gap is not a measurable
+        # acuity; derive decimal/Snellen from the floor (a lower bound) and flag it below.
+        floor_logmar = min_renderable_logmar(self.display.px_to_deg, self.params.min_gap_px)
+        decimal_acuity = float(10.0 ** (-max(reported, floor_logmar)))
         snellen_denominator_20 = 20.0 / decimal_acuity
         snellen_denominator_6 = 6.0 / decimal_acuity
 
@@ -513,6 +520,7 @@ class VisualAcuityTest(PsychophysicalTest):
         )
 
         quality_flags: list[QualityFlag] = compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,
@@ -525,8 +533,7 @@ class VisualAcuityTest(PsychophysicalTest):
         # Dynamic display-resolution check (Phase 2A task requirement): flag when
         # the measured threshold sits within 0.1 logMAR of the smallest gap this
         # display/viewing-distance combination can render.
-        floor_logmar = min_renderable_logmar(self.display.px_to_deg, self.params.min_gap_px)
-        if abs(reported - floor_logmar) <= 0.1:
+        if reported <= floor_logmar + 0.1:
             quality_flags = [
                 *quality_flags,
                 QualityFlag(
@@ -581,5 +588,5 @@ class VisualAcuityTest(PsychophysicalTest):
             n_trials=len(non_catch),
             n_catch=n_catch,
             catch_lapse_rate=catch_lapse_rate,
-            analysis_version="1.0.0",
+            analysis_version="1.1.0",
         )

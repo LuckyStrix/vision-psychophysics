@@ -281,6 +281,14 @@ class PsychoPyBackend(PresentationBackend):
             waitBlanking=True,
             allowGUI=False,
         )
+        actual = tuple(int(v) for v in self._win.size)
+        if actual != (display.width_px, display.height_px):
+            self._win.close()
+            raise RuntimeError(
+                f"The window is {actual[0]}x{actual[1]} px but the calibration is for "
+                f"{display.width_px}x{display.height_px} px (wrong monitor or resolution "
+                "changed?). Stimulus sizes would be wrong; recalibrate or fix the display."
+            )
         self._win.recordFrameIntervals = True
         self._keyboard = keyboard.Keyboard()
         self._message_stim = visual.TextStim(self._win, text="", wrapWidth=1200)
@@ -567,7 +575,10 @@ class TrialLoop:
         correct_response = trial_ctx.get("correct_response")
         correct = self.test.score(presented.response, stimulus_params)
 
-        if updates_procedure:
+        # A timeout (no response) is not evidence about sensitivity -- in an 8AFC task it is
+        # not even chance-level -- so it never updates the procedure. The trial is still
+        # recorded (correct=False, response=None) and the procedure simply re-proposes.
+        if updates_procedure and presented.response is not None:
             _update(self.procedure, value, correct)
 
         record = TrialRecord(

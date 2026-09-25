@@ -38,6 +38,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 
 #: Grid defaults kept small on purpose: this test exists to be *fast* in CI
@@ -47,7 +48,7 @@ from vpsych.tests_catalog.base import (
 #: informed by the actual dynamic range/precision the measurement needs.
 DEFAULT_INTENSITY_VALUES = [float(v) for v in np.linspace(-2.2, 0.2, 25)]
 DEFAULT_THRESHOLD_VALUES = [float(v) for v in np.linspace(-2.0, 0.0, 11)]
-DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.15, 0.6, 4)]
+DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.5, 6.0, 6)]
 DEFAULT_LAPSE_RATE_VALUES = [0.0, 0.02, 0.04]
 GUESS_RATE = 0.5  # 2AFC chance rate.
 
@@ -278,7 +279,7 @@ class ExampleContrastTest(PsychophysicalTest):
         `update`/`estimate` involve no randomness at all.
         """
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         procedure = self.make_procedure()
@@ -293,6 +294,7 @@ class ExampleContrastTest(PsychophysicalTest):
         )
 
         quality_flags = compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,
@@ -316,5 +318,5 @@ class ExampleContrastTest(PsychophysicalTest):
             n_trials=len(non_catch),
             n_catch=n_catch,
             catch_lapse_rate=catch_lapse_rate,
-            analysis_version="0.1.0",
+            analysis_version="0.2.0",
         )

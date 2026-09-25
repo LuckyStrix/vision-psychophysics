@@ -20,7 +20,7 @@ pseudonymous `sub-XXXX` ID this session belongs to) and an optional
 `calibration_hash` (the specific calibration to use; see
 `vpsych.data.paths.calibration_path`). If `calibration_hash` is omitted,
 the runner picks the most recently created `cal-*.json` file under the data
-root's `calibration/` directory (see `_most_recent_calibration`).
+root's `calibration/` directory (see `vpsych.data.dataset.latest_calibration`).
 
 ## The `Writer` protocol
 
@@ -66,7 +66,7 @@ from vpsych.core.trial_loop import (
     TrialLoop,
     TrialLoopResult,
 )
-from vpsych.data.paths import calibration_dir
+from vpsych.data import dataset
 from vpsych.data.paths import data_root as default_data_root
 from vpsych.data.schemas import SessionInfo, SessionPlan, SessionStatus, TestSummary
 from vpsych.runner.status import RunnerExitCode, RunnerStatus
@@ -446,21 +446,6 @@ def _install_signal_handlers() -> Callable[[], None]:
     return _restore
 
 
-def _most_recent_calibration(cal_dir: Path) -> Calibration | None:
-    """Pick the most recently created calibration under `cal_dir`, or `None` if there is none."""
-    if not cal_dir.exists():
-        return None
-    candidates: list[Calibration] = []
-    for path in sorted(cal_dir.glob("cal-*.json")):
-        try:
-            candidates.append(Calibration.model_validate_json(path.read_text(encoding="utf-8")))
-        except Exception:
-            continue
-    if not candidates:
-        return None
-    return max(candidates, key=lambda c: c.created_utc)
-
-
 def load_session_plan(
     session_plan_path: Path, data_root: Path
 ) -> tuple[SessionPlan, str, Calibration | None]:
@@ -479,22 +464,17 @@ def load_session_plan(
     Raises:
         FileNotFoundError: If `plan.calibration_hash` was given but no
             matching calibration file exists.
+        CalibrationIntegrityError: If that file was modified after being written.
     """
     raw = json.loads(session_plan_path.read_text(encoding="utf-8"))
     plan = SessionPlan.model_validate(raw)
 
-    cal_dir = calibration_dir(data_root)
+    # Shared loaders verify the content hash: calibrations are immutable, and a modified
+    # one must not silently drive stimulus sizing/gamma.
     if plan.calibration_hash:
-        cal_path = cal_dir / f"cal-{plan.calibration_hash}.json"
-        if not cal_path.exists():
-            raise FileNotFoundError(
-                f"Calibration {plan.calibration_hash!r} not found at {cal_path}."
-            )
-        calibration: Calibration | None = Calibration.model_validate_json(
-            cal_path.read_text(encoding="utf-8")
-        )
+        calibration: Calibration | None = dataset.load_calibration(plan.calibration_hash, data_root)
     else:
-        calibration = _most_recent_calibration(cal_dir)
+        calibration = dataset.latest_calibration(data_root)
 
     return plan, plan.participant_id, calibration
 
@@ -663,7 +643,7 @@ def run_session(
             git_commit=None,
             status="running",
             started_utc=datetime.now(timezone.utc),
-            environment=_placeholder_environment_checklist(),
+            environment=calibration.environment,
         )
         writer = writer_factory(participant_id, session_id, session_info, data_root)
 
@@ -691,6 +671,7 @@ def run_session(
             procedure = test.make_procedure()
 
             if backend.win is not None:
+                backend.win.color = (0.0, 0.0, 0.0)  # tests that need another background set it
                 test.build_stimuli(backend.win)
 
             timeline = _default_timeline(display)
@@ -716,8 +697,16 @@ def run_session(
                 trials_df = pd.DataFrame(
                     [r.model_dump(mode="python") for r in result.trial_records]
                 )
-                summary = test.summarize(trials_df)
-                writer.write_summary(test.spec.id, planned.eye, run_number, summary)
+                try:
+                    summary = test.summarize(trials_df)
+                except Exception:
+                    # An aborted run may have too few trials to estimate anything; that must
+                    # not turn a user abort into a runner error. Trials are already on disk.
+                    if not result.aborted:
+                        raise
+                    summary = None
+                if summary is not None:
+                    writer.write_summary(test.spec.id, planned.eye, run_number, summary)
 
             if result.aborted:
                 aborted = True
@@ -747,13 +736,23 @@ def run_session(
         return exit_code
 
     finally:
+        finalize_error: str | None = None
         if writer is not None:
-            with _SuppressSecondaryErrors():
+            try:
                 writer.finalize(final_status)
+            except Exception:
+                # Never hide this: the session would otherwise stay "running" with no manifest
+                # while the run reports success.
+                finalize_error = traceback.format_exc()
+                traceback.print_exc()
         if backend is not None and hasattr(backend, "close"):
             with _SuppressSecondaryErrors():
                 backend.close()
         restore_signals()
+        if finalize_error is not None:
+            with _SuppressSecondaryErrors():
+                _status(state="error", error=f"Failed to finalize session data:\n{finalize_error}")
+            return RunnerExitCode.ERROR  # noqa: B012 -- deliberately overrides the try's exit code
 
 
 class _SuppressSecondaryErrors:
@@ -778,18 +777,6 @@ def _psychopy_version() -> str:
         return str(getattr(psychopy, "__version__", "unknown"))
     except Exception:  # pragma: no cover
         return "unknown"
-
-
-def _placeholder_environment_checklist() -> Any:
-    from vpsych.core.calibration.models import EnvironmentChecklist
-
-    return EnvironmentChecklist(
-        room_lighting_controlled=True,
-        monitor_warmed_up=True,
-        night_light_disabled=True,
-        hdr_disabled=True,
-        notes="Environment checklist not yet collected by the calibration wizard (Phase 3).",
-    )
 
 
 def _default_timeline(display: DisplayGeometry) -> TrialTimeline:

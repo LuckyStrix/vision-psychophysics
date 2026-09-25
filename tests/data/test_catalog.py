@@ -103,3 +103,49 @@ def test_rebuild_catalog_includes_participants(tmp_path: Path) -> None:
     assert row is not None
     assert row["year_of_birth"] == 1985
     assert row["sex"] == "M"
+
+
+def test_rebuild_catalog_skips_a_corrupt_session_and_indexes_the_rest(tmp_path: Path) -> None:
+    from vpsych.data import paths
+
+    pid, sid, _ = build_full_session(tmp_path)
+    bad = paths.participant_dir(pid, tmp_path) / "ses-20200101T000000"
+    bad.mkdir()
+    (bad / "session.json").write_text("{not valid", encoding="utf-8")
+
+    catalog.rebuild_catalog(tmp_path)
+
+    assert [s["session_id"] for s in catalog.sessions_for_participant(pid, tmp_path)] == [sid]
+
+
+def test_nan_estimate_round_trips_so_the_run_stays_visible() -> None:
+    from vpsych.core.procedures.base import ThresholdEstimate
+    from vpsych.data.schemas import TestSummary
+
+    est = ThresholdEstimate(
+        value=float("nan"),
+        ci_low=float("nan"),
+        ci_high=float("inf"),
+        ci_level=0.95,
+        units="logMAR",
+        method="m",
+        extra={"x": float("nan")},
+    )
+    summary = TestSummary(
+        task_id="t",
+        task_version="1",
+        eye="OD",
+        run=1,
+        estimate=est,
+        fit_params={},
+        gof={},
+        quality_flags=[],
+        n_trials=1,
+        n_catch=0,
+        catch_lapse_rate=0.0,
+        frame_stats={},
+        analysis_version="1",
+    )
+    back = TestSummary.model_validate_json(summary.model_dump_json())
+    assert back.estimate.value != back.estimate.value  # NaN
+    assert back.estimate.ci_high == float("inf")

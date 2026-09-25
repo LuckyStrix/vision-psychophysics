@@ -7,12 +7,15 @@ files itself, it only composes and formats what those modules return.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from vpsych.data import catalog, dataset, paths
 from vpsych.data.schemas import TestSummary
 from vpsych.data.validate import ValidationIssue, ValidationReport
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,7 @@ def list_summaries_for_session(
                 TestSummary.model_validate_json(summary_path.read_text(encoding="utf-8"))
             )
         except Exception:
+            log.warning("Skipping unreadable summary %s", summary_path, exc_info=True)
             continue
     return summaries
 

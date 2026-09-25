@@ -107,6 +107,10 @@ class DisplayQueryError(RuntimeError):
     """Raised when the OS-reported display resolution/refresh rate cannot be determined."""
 
 
+#: Above this the OS-reported "refresh rate" is almost certainly a driver placeholder.
+_MAX_PLAUSIBLE_REFRESH_HZ = 500.0
+
+
 def query_os_resolution_refresh() -> tuple[int, int, float]:
     """Query the primary display's resolution and refresh rate from the OS.
 
@@ -141,6 +145,10 @@ def query_os_resolution_refresh() -> tuple[int, int, float]:
         raise DisplayQueryError("OS did not report a usable display mode (width/height).")
 
     refresh_hz = getattr(mode, "rate", None)
+    if refresh_hz and refresh_hz > _MAX_PLAUSIBLE_REFRESH_HZ:
+        raise DisplayQueryError(
+            f"OS reported an implausible refresh rate ({refresh_hz:g} Hz); supply it manually."
+        )
     if not refresh_hz or refresh_hz <= 0:
         raise DisplayQueryError(
             "OS did not report a usable (positive) refresh rate; supply it manually."

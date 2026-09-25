@@ -204,6 +204,20 @@ def _equal_tailed_credible_interval(
     return ci_low, ci_high
 
 
+def _pad_threshold_grid(values: list[float], pad_frac: float) -> list[float]:
+    """Extend an evenly spaced threshold grid past both ends by `pad_frac` of its span."""
+    arr = np.asarray(values, dtype=float)
+    if pad_frac <= 0 or arr.size < 2:
+        return list(values)
+    step = float(np.median(np.diff(arr)))
+    if step <= 0:
+        return list(values)
+    n_pad = int(np.ceil(pad_frac * (arr[-1] - arr[0]) / step))
+    lo = arr[0] - step * np.arange(n_pad, 0, -1)
+    hi = arr[-1] + step * np.arange(1, n_pad + 1)
+    return [float(v) for v in np.concatenate([lo, arr, hi])]
+
+
 class QuestPlusProcedure:
     """QUEST+ single-parameter adaptive procedure.
 
@@ -241,6 +255,13 @@ class QuestPlusProcedure:
         param_estimation_method: `"mean"` (default) or `"mode"`; which
             summary of the posterior `estimate()` reports. Not part of the
             Phase 0 freeze; see module docstring.
+        threshold_pad_frac: Fraction of the threshold grid's span to extend
+            it by on *each* side (same step). The true threshold may lie
+            beyond the presentable intensity range (e.g. an observer better
+            than the display floor); without padding the posterior piles onto
+            the edge grid point, giving a degenerate credible interval
+            (`ci_low == ci_high`) and a falsely certain estimate. `0` keeps
+            the grid exactly as given.
     """
 
     def __init__(
@@ -259,6 +280,7 @@ class QuestPlusProcedure:
         ci_level: float = 0.95,
         stim_scale: Literal["log10", "linear", "dB"] = "log10",
         param_estimation_method: Literal["mean", "mode"] = "mean",
+        threshold_pad_frac: float = 0.25,
     ) -> None:
         if function == "logistic":
             raise ValueError(
@@ -278,6 +300,8 @@ class QuestPlusProcedure:
             raise ValueError(
                 "threshold_values, slope_values, and lapse_rate_values must be non-empty"
             )
+
+        threshold_values = _pad_threshold_grid(threshold_values, threshold_pad_frac)
 
         self.intensity_values = intensity_values
         self.intensity_units = intensity_units

@@ -11,11 +11,14 @@ every session. Uses only the standard library `sqlite3` module.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
 from vpsych.data import dataset, paths
 from vpsych.data.schemas import SessionInfo, TestSummary
+
+log = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS participants (
@@ -159,6 +162,7 @@ def index_session(
                         summary_path.read_text(encoding="utf-8")
                     )
                 except Exception:
+                    log.warning("Skipping unreadable summary %s", summary_path, exc_info=True)
                     continue
                 conn.execute(
                     """
@@ -253,7 +257,11 @@ def rebuild_catalog(root: Path | None = None) -> None:
 
         for participant_dir in sorted(p for p in root.glob("sub-*") if p.is_dir()):
             for session_dir in sorted(s for s in participant_dir.glob("ses-*") if s.is_dir()):
-                index_session(participant_dir.name, session_dir.name, root, conn=conn)
+                try:
+                    index_session(participant_dir.name, session_dir.name, root, conn=conn)
+                except Exception:
+                    # One damaged session must not leave every other session unindexed.
+                    log.warning("Skipping unindexable session %s", session_dir, exc_info=True)
     finally:
         conn.close()
 

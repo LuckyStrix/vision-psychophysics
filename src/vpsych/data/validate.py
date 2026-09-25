@@ -146,7 +146,7 @@ def validate_session(
         on_disk = {
             p.relative_to(session_dir).as_posix()
             for p in session_dir.rglob("*")
-            if p.is_file() and p != manifest_path
+            if p.is_file() and p != manifest_path and "_summary-reanalysis-" not in p.name
         }
         for rel_path, expected_digest in listed.items():
             fpath = session_dir / rel_path

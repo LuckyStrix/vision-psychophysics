@@ -45,6 +45,8 @@ accurate description):
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 
@@ -64,6 +66,18 @@ FloatArray = npt.NDArray[np.float64]
 __all__ = [
     "gamma_channel_model_from_calibration",  # re-exported from core.calibration.gamma
 ]
+
+
+def set_mean_gray_background(win: Any, model: GammaChannelModel) -> None:
+    """Make the window background the linearized mean gray the stimulus is drawn around.
+
+    The window's default background is rgb 0, which is 50% *drive*, not 50%
+    *luminance*; stimulus patches are gamma-linearized around 50% luminance,
+    so without this they appear as a lighter square on a darker surround and
+    contrast is not defined against the adapting background.
+    """
+    drive = float(linearize(0.5, model))
+    win.color = drive * 2.0 - 1.0
 
 
 def mean_luminance_cdm2(model: GammaChannelModel) -> float:

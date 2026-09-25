@@ -535,6 +535,28 @@ class PsychophysicalTest(ABC):
 _REGISTRY: dict[str, type[PsychophysicalTest]] = {}
 
 
+def split_scored_trials(main: Any) -> tuple[Any, int]:
+    """Split a run's main-block rows into the trials that inform the estimate.
+
+    Non-catch rows with no response (a timeout) are not evidence about the
+    observer's sensitivity -- a missed 8AFC trial is not chance-level -- so
+    they are excluded from estimation (the trial loop likewise never feeds
+    them to the procedure) and only counted.
+
+    Args:
+        main: The main-block rows of a trials DataFrame.
+
+    Returns:
+        `(non_catch_answered_sorted_by_trial_index, n_timeouts)`.
+    """
+    non_catch = main[~main["is_catch"]]
+    if "response" in non_catch.columns:
+        answered = ~non_catch["response"].isna()
+    else:  # frames without a response column carry no timeout information
+        answered = non_catch["is_catch"].notna()
+    return non_catch[answered].sort_values("trial_index"), int((~answered).sum())
+
+
 def register_test(cls: type[PsychophysicalTest]) -> type[PsychophysicalTest]:
     """Class decorator that registers a `PsychophysicalTest` subclass by its spec id.
 

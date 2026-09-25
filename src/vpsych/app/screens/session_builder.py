@@ -152,6 +152,8 @@ class SessionBuilderScreen(QWidget):
         self.participant_label.setText(
             f"Participant: {pid}" if pid else "No participant selected (choose one on Home)."
         )
+        if hasattr(self, "start_button"):  # first call happens before the summary widgets exist
+            self._refresh_summary()
 
     def add_test(self, task_id: str) -> None:
         """Add a test to the plan (called when a catalog card's "Add to session" fires)."""

@@ -169,14 +169,22 @@ class DataScreen(QWidget):
         out_path, _ = QFileDialog.getSaveFileName(self, "Export participant", filter="Zip (*.zip)")
         if not out_path:
             return
-        export_participant(row.participant_id, out_path, self._state.data_root)
+        try:
+            export_participant(row.participant_id, out_path, self._state.data_root)
+        except Exception as exc:
+            self.output_text.setPlainText(f"Export failed: {exc}")
+            return
         self.output_text.setPlainText(f"Exported {row.participant_id} to {out_path}")
 
     def _on_export_dataset(self) -> None:
         out_path, _ = QFileDialog.getSaveFileName(self, "Export dataset", filter="Zip (*.zip)")
         if not out_path:
             return
-        export_dataset(out_path, self._state.data_root)
+        try:
+            export_dataset(out_path, self._state.data_root)
+        except Exception as exc:
+            self.output_text.setPlainText(f"Export failed: {exc}")
+            return
         self.output_text.setPlainText(f"Exported dataset to {out_path}")
 
     def _on_open_report(self) -> None:

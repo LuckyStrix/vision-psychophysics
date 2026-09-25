@@ -40,6 +40,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 from vpsych.tests_catalog.motion_coherence.dots import (
     DIRECTION_ANGLES_DEG,
@@ -64,7 +65,7 @@ DEFAULT_INTENSITY_VALUES = [
 DEFAULT_THRESHOLD_VALUES = [
     float(v) for v in np.linspace(COHERENCE_DOMAIN_LOG10[0], COHERENCE_DOMAIN_LOG10[1], 21)
 ]
-DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.1, 1.0, 6)]
+DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.5, 6.0, 6)]
 DEFAULT_LAPSE_RATE_VALUES = [0.0, 0.02, 0.04]
 
 #: Minimum refresh this test will run on -- see `docs/methods/motion_coherence.md`
@@ -396,7 +397,7 @@ class MotionCoherenceTest(PsychophysicalTest):
         requirement.
         """
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         procedure = self.make_procedure()
@@ -425,6 +426,7 @@ class MotionCoherenceTest(PsychophysicalTest):
         range_max_percent = _to_percent(max(DEFAULT_INTENSITY_VALUES))
 
         quality_flags = compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,
@@ -467,5 +469,5 @@ class MotionCoherenceTest(PsychophysicalTest):
             n_trials=len(non_catch),
             n_catch=n_catch,
             catch_lapse_rate=catch_lapse_rate,
-            analysis_version="0.1.0",
+            analysis_version="0.2.0",
         )

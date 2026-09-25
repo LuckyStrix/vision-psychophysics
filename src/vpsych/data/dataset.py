@@ -284,7 +284,7 @@ def update_participant(
     found = False
     for p in existing:
         if p.participant_id == participant_id:
-            p = p.model_copy(update=fields)
+            p = Participant.model_validate({**p.model_dump(), **fields})  # validates the update
             found = True
         updated.append(p)
     if not found:

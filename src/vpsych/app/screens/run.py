@@ -85,8 +85,14 @@ class RunScreen(QWidget):
             simulate: Forwarded to the runner's `--simulate` flag; only ever
                 set by tests/demos, never a real session.
         """
+        if self._controller is not None and self._controller.is_running:
+            self.status_label.setText("A session is already running; abort or finish it first.")
+            return
         self._run_dir.mkdir(parents=True, exist_ok=True)
         status_path = self._run_dir / f"status-{plan.participant_id}-{plan.seed}.json"
+        # A leftover status from an earlier run with the same seed would be read as this
+        # run's progress (or as its outcome if the runner dies before writing).
+        status_path.unlink(missing_ok=True)
         self.status_label.setText("Starting runner subprocess...")
         self.outcome_label.clear()
         self.progress_bar.setValue(0)

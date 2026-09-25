@@ -191,7 +191,9 @@ class TestSummary(BaseModel):
 
     __test__ = False  # not a pytest test class, despite the name
 
-    model_config = ConfigDict(frozen=True)
+    # NaN/inf estimates (e.g. a degenerate fit) must round-trip, not serialize to null and
+    # then fail to load, which silently hid the whole run from every reader.
+    model_config = ConfigDict(frozen=True, ser_json_inf_nan="constants")
 
     task_id: str = Field(description="TestSpec.id this summary is for.")
     task_version: str = Field(description="TestSpec.version this run used.")

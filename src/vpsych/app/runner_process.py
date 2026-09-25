@@ -85,6 +85,7 @@ class RunnerProcessController(QObject):
         super().__init__(parent)
         self._status_file_path = status_file_path
         self._last_status: RunnerStatus | None = None
+        self._finished_emitted = False
         self._process = QProcess(self)
         program, args = build_runner_command(
             session_plan_path, status_file_path, data_root, simulate
@@ -115,6 +116,11 @@ class RunnerProcessController(QObject):
             self._process.kill()
 
     @property
+    def is_running(self) -> bool:
+        """Whether the runner subprocess is currently starting or running."""
+        return self._process.state() != QProcess.ProcessState.NotRunning
+
+    @property
     def last_status(self) -> RunnerStatus | None:
         """The most recently read `RunnerStatus`, or `None` if none has been read yet."""
         return self._last_status
@@ -133,7 +139,17 @@ class RunnerProcessController(QObject):
             self.status_updated.emit(status)
 
     def _on_process_error(self, error: QProcess.ProcessError) -> None:
-        del error  # detail not needed: _on_process_finished always fires too/instead
+        # Qt emits `finished` for crashes but not when the process never started (bad
+        # interpreter, missing module), so that case must be reported here or the UI
+        # would wait forever.
+        if error == QProcess.ProcessError.FailedToStart:
+            self._timer.stop()
+            self._emit_finished(RunnerExitCode.ERROR)
+
+    def _emit_finished(self, code: RunnerExitCode) -> None:
+        if not self._finished_emitted:
+            self._finished_emitted = True
+            self.finished.emit(code)
 
     def _on_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
         self._timer.stop()
@@ -145,4 +161,4 @@ class RunnerProcessController(QObject):
                 code = RunnerExitCode(exit_code)
             except ValueError:
                 code = RunnerExitCode.ERROR
-        self.finished.emit(code)
+        self._emit_finished(code)

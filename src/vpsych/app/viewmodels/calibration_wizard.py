@@ -102,6 +102,31 @@ class GeometryStepState:
             return estimate_display_width_cm(self.card_width_px, self.width_px)
         return self.width_cm
 
+    def derived_height_cm(self) -> float | None:
+        """Physical height implied by the width and (square) pixel aspect ratio, or `None`."""
+        width_cm = self.resolve_width_cm()
+        if width_cm is None or not self.width_px or not self.height_px:
+            return None
+        return width_cm * self.height_px / self.width_px
+
+    def height_warning(self) -> str | None:
+        """Explain a physical height that disagrees with width and pixel aspect ratio.
+
+        Not an error: a panel running a non-native resolution can legitimately have
+        non-square pixels. But it is far more often a wrong or never-measured height.
+        """
+        expected = self.derived_height_cm()
+        if expected is None or self.height_cm is None:
+            return None
+        if abs(self.height_cm - expected) <= HEIGHT_TOLERANCE_FRAC * expected:
+            return None
+        return (
+            f"Height {self.height_cm:.1f} cm disagrees with the width and "
+            f"{self.width_px}x{self.height_px} px resolution, which imply about "
+            f"{expected:.1f} cm for square pixels. Re-measure it unless the display is "
+            "running a non-native resolution."
+        )
+
     def build(self) -> DisplayGeometry:
         """Build a `DisplayGeometry` from this step's state.
 
@@ -141,6 +166,10 @@ class GeometryStepState:
             refresh_hz=self.refresh_hz,
         )
 
+
+#: Largest relative disagreement tolerated between the entered physical height and the
+#: height implied by width and pixel aspect ratio (square pixels).
+HEIGHT_TOLERANCE_FRAC = 0.03
 
 #: Default target luminance fractions for the psychophysical bisection task (grade B).
 #: Five levels spanning the mid-range, avoiding 0/1 themselves (the underlying
@@ -387,6 +416,19 @@ class CalibrationWizardState:
     color: ColorStepState = field(default_factory=ColorStepState)
     environment: EnvironmentChecklist | None = None
     notes: str | None = None
+
+    def reset(self) -> None:
+        """Clear every step (in place, so widgets holding this object stay wired).
+
+        Called after a calibration is saved so the next one starts clean: otherwise
+        environment/geometry carry over and each calsuite import appends another copy
+        of its provenance note.
+        """
+        self.geometry = GeometryStepState()
+        self.gamma = GammaStepState()
+        self.color = ColorStepState()
+        self.environment = None
+        self.notes = None
 
     def build_calibration(self, software_version: str, now: datetime | None = None) -> Calibration:
         """Assemble the immutable `Calibration` from every completed step.

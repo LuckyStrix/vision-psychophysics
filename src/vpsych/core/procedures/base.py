@@ -42,7 +42,9 @@ class ThresholdEstimate(BaseModel):
             of reversals used), JSON-serializable.
     """
 
-    model_config = ConfigDict(frozen=True)
+    # NaN/inf must survive a JSON round trip (default serialization turns them into null,
+    # which then fails validation and makes the whole summary unreadable).
+    model_config = ConfigDict(frozen=True, ser_json_inf_nan="constants")
 
     value: float = Field(description="Estimated threshold, in `units`.")
     ci_low: float = Field(description="Lower confidence bound, in `units`.")

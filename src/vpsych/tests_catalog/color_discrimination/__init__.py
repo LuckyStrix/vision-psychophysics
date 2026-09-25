@@ -117,6 +117,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 from vpsych.tests_catalog.color_discrimination import colorspace, discs
 from vpsych.tests_catalog.color_discrimination import observer as _observer  # noqa: F401
@@ -193,7 +194,7 @@ CCT_NOMINAL_MAX_DISPLACEMENT_UV_X1E4 = 1100.0
 #: search grid).
 N_INTENSITY_LEVELS = 20
 N_THRESHOLD_LEVELS = 10
-DEFAULT_SLOPE_VALUES = [0.2, 0.35, 0.5, 0.65, 0.8]
+DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.5, 6.0, 6)]
 DEFAULT_LAPSE_RATE_VALUES = [0.0, 0.02, 0.04]
 
 #: Number of luminance samples across the noise range used to verify gamut
@@ -633,7 +634,7 @@ class ColorDiscriminationTest(PsychophysicalTest):
         section 10's "pure function of trials alone" requirement.
         """
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         procedure = self.make_procedure()
@@ -650,6 +651,7 @@ class ColorDiscriminationTest(PsychophysicalTest):
         )
 
         quality_flags: list[QualityFlag] = compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,
@@ -715,5 +717,5 @@ class ColorDiscriminationTest(PsychophysicalTest):
             n_trials=len(non_catch),
             n_catch=n_catch,
             catch_lapse_rate=catch_lapse_rate,
-            analysis_version="0.1.0",
+            analysis_version="0.2.0",
         )

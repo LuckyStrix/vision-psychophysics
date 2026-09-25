@@ -8,6 +8,7 @@ Run -> Results) so the whole app is reachable both by mouse and by keyboard
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -29,6 +30,8 @@ from vpsych.app.screens.run import RunScreen
 from vpsych.app.screens.session_builder import SessionBuilderScreen
 from vpsych.app.state import AppState
 from vpsych.data import catalog
+
+log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -126,10 +129,13 @@ class MainWindow(QMainWindow):
 
     def _on_run_finished(self, exit_code: object) -> None:
         del exit_code
-        # The runner subprocess writes session files but never touches the
-        # catalog index the Results screen reads, so re-index before refreshing.
+        # The runner subprocess writes session files but never touches the catalog index
+        # the screens read, so re-index before refreshing them. (Per-session failures are
+        # logged and skipped inside rebuild_catalog.)
         try:
             catalog.rebuild_catalog(self._state.data_root)
         except Exception:
-            pass  # raw data is intact; `rebuild-catalog` in the data CLI can recover
+            log.warning("Catalog rebuild failed after a run", exc_info=True)
         self.results_screen.refresh()
+        self.home_screen.refresh()
+        self.data_screen.refresh()

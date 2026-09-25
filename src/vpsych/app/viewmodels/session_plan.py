@@ -20,6 +20,11 @@ class SessionBuilderError(ValueError):
     """Raised when a `SessionBuilderState` cannot be turned into a valid `SessionPlan`."""
 
 
+#: Viewing distance a test gets when added to a session (the runner checks requirements at
+#: each test's own distance, so the catalog evaluates availability at this default).
+DEFAULT_VIEWING_DISTANCE_CM = 60.0
+
+
 @dataclass
 class PlannedTestState:
     """One planned test entry as edited by the session-builder screen.
@@ -35,7 +40,7 @@ class PlannedTestState:
 
     task_id: str
     eye: str = "OU"
-    viewing_distance_cm: float = 60.0
+    viewing_distance_cm: float = DEFAULT_VIEWING_DISTANCE_CM
     params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -60,7 +65,12 @@ class SessionBuilderState:
     seed: int | None = None
     calibration_hash: str | None = None
 
-    def add_test(self, task_id: str, eye: str = "OU", viewing_distance_cm: float = 60.0) -> None:
+    def add_test(
+        self,
+        task_id: str,
+        eye: str = "OU",
+        viewing_distance_cm: float = DEFAULT_VIEWING_DISTANCE_CM,
+    ) -> None:
         """Append a test to the plan (does not deduplicate; a test can be run more than once)."""
         self.tests.append(
             PlannedTestState(task_id=task_id, eye=eye, viewing_distance_cm=viewing_distance_cm)

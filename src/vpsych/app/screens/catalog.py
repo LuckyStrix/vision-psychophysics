@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from vpsych.app.state import AppState
 from vpsych.app.viewmodels.catalog import TestCardViewModel, build_test_cards, group_by_domain
+from vpsych.app.viewmodels.session_plan import DEFAULT_VIEWING_DISTANCE_CM
 from vpsych.core.display import DisplayGeometry
 from vpsych.tests_catalog.base import discover_tests
 
@@ -120,7 +121,9 @@ class TestCatalogScreen(QWidget):
     def _current_display(self) -> DisplayGeometry:
         calibration = self._state.latest_calibration
         if calibration is not None:
-            return calibration.geometry
+            return calibration.geometry.model_copy(
+                update={"viewing_distance_cm": DEFAULT_VIEWING_DISTANCE_CM}
+            )
         # No calibration yet: use a conservative placeholder geometry purely so
         # `check_requirements` has something to evaluate against -- never
         # invented as if it were a real measurement, and every gamma/color
@@ -130,7 +133,7 @@ class TestCatalogScreen(QWidget):
             height_px=1080,
             width_cm=53.0,
             height_cm=30.0,
-            viewing_distance_cm=60.0,
+            viewing_distance_cm=DEFAULT_VIEWING_DISTANCE_CM,
             refresh_hz=60.0,
         )
 

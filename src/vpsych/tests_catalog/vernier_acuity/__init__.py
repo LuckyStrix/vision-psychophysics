@@ -75,6 +75,7 @@ from vpsych.tests_catalog.base import (
     TestRequirements,
     TestSpec,
     register_test,
+    split_scored_trials,
 )
 from vpsych.tests_catalog.vernier_acuity.texture import render_vertical_line_texture
 
@@ -88,7 +89,7 @@ DEFAULT_N_THRESHOLD_LEVELS = 15
 #: comment for the full reasoning; a Vernier psychometric function is
 #: typically steep (small dynamic range between threshold and ceiling), so
 #: this grid leans toward somewhat higher beta than the acuity test's.
-DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(1.0, 8.0, 6)]
+DEFAULT_SLOPE_VALUES = [float(v) for v in np.linspace(0.5, 8.0, 6)]
 
 
 class VernierAcuityParams(BaseModel):
@@ -286,6 +287,9 @@ class VernierAcuityTest(PsychophysicalTest):
             return {}
         from psychopy import visual
 
+        # The stimulus canvas is white (drive 1.0 at any gamma); match the window to it so
+        # the canvas edge is not a visible luminance step.
+        win.color = 1.0
         fixation = visual.TextStim(win, text="+", height=20, color=-1.0)
         self._stims = {"fixation": fixation}
         return self._stims
@@ -460,7 +464,7 @@ class VernierAcuityTest(PsychophysicalTest):
 
     def summarize(self, trials: pd.DataFrame) -> TestSummary:
         main = trials[trials["block"] == "main"]
-        non_catch = main[~main["is_catch"]].sort_values("trial_index")
+        non_catch, n_timeouts = split_scored_trials(main)
         catch = main[main["is_catch"]]
 
         procedure = self.make_procedure()
@@ -484,6 +488,7 @@ class VernierAcuityTest(PsychophysicalTest):
         )
 
         quality_flags: list[QualityFlag] = compute_quality_flags(
+            n_timeouts=n_timeouts,
             catch_lapse_rate=catch_lapse_rate,
             n_catch=n_catch,
             dropped_fraction=dropped_fraction,
@@ -561,5 +566,5 @@ class VernierAcuityTest(PsychophysicalTest):
             n_trials=len(non_catch),
             n_catch=n_catch,
             catch_lapse_rate=catch_lapse_rate,
-            analysis_version="1.0.0",
+            analysis_version="1.1.0",
         )
