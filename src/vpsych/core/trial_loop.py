@@ -256,6 +256,18 @@ class SimulatedBackend(PresentationBackend):
         return self._trials_presented > self._abort_after_trials
 
 
+def _contrasting_text_color(win_color: Any) -> tuple[float, float, float]:
+    """Black or white (PsychoPy `[-1, 1]` rgb), whichever contrasts with `win_color`.
+
+    A test is free to set `win.color` to whatever its stimulus needs (see
+    e.g. `visual_acuity`/`vernier_acuity` setting it to white to match a
+    white texture canvas); message/feedback text must not be given a fixed
+    color, or it can end up invisible against a background chosen later.
+    """
+    mean = float(np.mean(np.atleast_1d(np.asarray(win_color, dtype=float))))
+    return (-1.0, -1.0, -1.0) if mean >= 0.0 else (1.0, 1.0, 1.0)
+
+
 class PsychoPyBackend(PresentationBackend):
     """Real backend: a fullscreen PsychoPy window and a hardware-timestamped keyboard.
 
@@ -291,7 +303,10 @@ class PsychoPyBackend(PresentationBackend):
             )
         self._win.recordFrameIntervals = True
         self._keyboard = keyboard.Keyboard()
-        self._message_stim = visual.TextStim(self._win, text="", wrapWidth=1200)
+        # wrapWidth from the real window width (not a fixed constant) so long instruction
+        # lines don't run off-screen on a narrower display.
+        wrap_width = min(1200.0, display.width_px * 0.9)
+        self._message_stim = visual.TextStim(self._win, text="", wrapWidth=wrap_width)
         self._feedback_stim = visual.TextStim(self._win, text="", height=40)
 
     @property
@@ -318,6 +333,11 @@ class PsychoPyBackend(PresentationBackend):
         }
 
     def show_message(self, text: str) -> None:
+        # A test may set win.color to whatever its stimulus needs (e.g. white for
+        # visual_acuity/vernier_acuity); a fixed text color would then be invisible
+        # against it, so pick whichever of black/white contrasts with the current
+        # background each time a message is shown.
+        self._message_stim.color = _contrasting_text_color(self._win.color)
         self._message_stim.text = text + "\n\n(press space to continue)"
         self._keyboard.clearEvents()
         while True:

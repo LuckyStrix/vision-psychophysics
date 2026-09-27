@@ -164,6 +164,15 @@ def index_session(
                 except Exception:
                     log.warning("Skipping unreadable summary %s", summary_path, exc_info=True)
                     continue
+                # value/ci_low/ci_high: a NaN threshold (a genuinely degenerate fit -- e.g. an
+                # observer better than the display floor, see visual_acuity) is stored by
+                # SQLite as NULL (SQLite's REAL storage has no NaN representation, and this
+                # coercion happens even though the same summary's JSON file round-trips NaN
+                # exactly via TestSummary's ser_json_inf_nan="constants"). This is relied on,
+                # not accidental: history_figure's `np.array(..., dtype=float)` turns that NULL
+                # back into NaN, which is what a gap/degenerate point in the history plot
+                # should be; +/-inf are unaffected (SQLite stores those exactly). The JSON file
+                # under beh/, read directly by list_summaries_for_session, is the lossless copy.
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO test_summaries

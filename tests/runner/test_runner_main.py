@@ -459,9 +459,27 @@ def test_register_simulated_observer_kind_extends_dispatch() -> None:
         with pytest.raises(ValueError, match="built-in kind"):
             register_simulated_observer_kind("psychometric", _builder)
     finally:
-        from vpsych.runner import __main__ as _runner_main
+        from vpsych.runner import simulated_observer_registry as _registry
 
-        del _runner_main._REGISTERED_SIMULATED_OBSERVER_KINDS["test_only_kind_xyz"]
+        del _registry.REGISTERED_SIMULATED_OBSERVER_KINDS["test_only_kind_xyz"]
+
+
+def test_registry_lives_outside___main___so_it_survives_python_dash_m() -> None:
+    """Regression: `register_simulated_observer_kind` and the dict `build_simulated_observer`
+    reads from must be the *same* object regardless of whether this process imported
+    `vpsych.runner.__main__` by name or is running it as `__main__` (`python -m
+    vpsych.runner`) -- those are two different module objects for anything literally
+    named `__main__.py`, so a registry defined inside `runner/__main__.py` itself would
+    silently split in two under `-m`, and a kind registered by one copy (e.g.
+    color_discrimination's import-time `register_simulated_observer_kind("trivector", ...)`)
+    would be invisible to `run_session` reading the other. See
+    `vpsych.runner.simulated_observer_registry`'s module docstring."""
+    import vpsych.runner.__main__ as runner_main
+    from vpsych.runner import simulated_observer_registry
+
+    assert runner_main.register_simulated_observer_kind is (
+        simulated_observer_registry.register_simulated_observer_kind
+    )
 
 
 def test_parse_simulated_observer_spec_malformed_pair_raises() -> None:

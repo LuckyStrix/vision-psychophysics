@@ -257,6 +257,11 @@ test's `summarize` calls into (directly or via `compute_quality_flags`):
   the test's minimum, or the calibration is older than 30 days (`warning`).
 - `poor_gof`: goodness-of-fit p-value < 0.05 (`warning`).
 - `too_few_trials`: fewer main-block trials than expected (`warning`).
+- `many_timeouts`: more than 10% of attempted main, non-catch trials timed
+  out with no response (`warning`). A timeout is recorded as a trial row
+  (`response` empty, `correct` False) but excluded from the threshold
+  estimate -- it is not chance-level evidence in a forced-choice task, so
+  it must not be scored as a miss.
 
 ## Frame timing
 

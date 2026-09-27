@@ -248,7 +248,10 @@ class DummyTest(PsychophysicalTest):
                 units="logMAR",
                 method="mean",
             ),
-            fit_params={},
+            # Not used by DummyTest itself; lets a test assert *which* display geometry
+            # (in particular viewing_distance_cm) reanalyze_session actually reconstructed
+            # this test instance with.
+            fit_params={"viewing_distance_cm": self.display.viewing_distance_cm},
             gof={},
             quality_flags=[],
             n_trials=len(main),

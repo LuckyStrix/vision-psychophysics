@@ -466,6 +466,15 @@ class QCSF(MultiParamProcedure):
         ci_low, ci_high = _weighted_percentile(
             aulcsf_grid, self._posterior, [alpha / 2, 1 - alpha / 2]
         )
+        # The point estimate and the CI are deliberately computed by two different methods
+        # (see the plug-in-vs-Jensen's-inequality discussion above), so they can disagree by
+        # more than the CI's own half-width when the posterior is still diffuse (near-chance
+        # data) -- occasionally enough to put `value` outside `[ci_low, ci_high]` entirely,
+        # which no consumer of a "confidence interval" should have to handle. Widen the
+        # reported interval (never narrow it) to guarantee it contains the point estimate;
+        # this is conservative, not a claim that mass exists out there.
+        ci_low = min(ci_low, point_aulcsf)
+        ci_high = max(ci_high, point_aulcsf)
 
         std_freqs = np.array(STANDARD_FREQUENCIES_CPD)
         log_cs_grid = self._log_cs_at(

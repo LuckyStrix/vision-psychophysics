@@ -69,6 +69,7 @@ from vpsych.core.trial_loop import (
 from vpsych.data import dataset
 from vpsych.data.paths import data_root as default_data_root
 from vpsych.data.schemas import SessionInfo, SessionPlan, SessionStatus, TestSummary
+from vpsych.runner import simulated_observer_registry as _registry
 from vpsych.runner.status import RunnerExitCode, RunnerStatus
 
 try:  # pragma: no cover - version metadata only
@@ -129,49 +130,13 @@ _BUILTIN_SIMULATED_OBSERVERS: dict[str, Callable[[], SimulatedObserver]] = {
     "always_correct": _AlwaysCorrectObserver,
 }
 
-#: Registry of `build_simulated_observer` "kind" extensions, beyond the two
-#: built in (`"psychometric"`, `"csf"`). Was previously a closed `if/elif`
-#: in `build_simulated_observer` that only this module could extend --
-#: `color_discrimination`'s multi-axis `TrivectorObserver` needs a per-axis
-#: threshold spec (`{"threshold_protan": ..., "threshold_deutan": ...,
-#: "threshold_tritan": ...}`) that neither of the two built-in kinds can
-#: express, and had to bypass `--simulate`/`--simulate-config` entirely,
-#: injecting a directly-constructed observer via `run_session`'s
-#: `simulated_observer=` kwarg instead (see
-#: `vpsych.tests_catalog.color_discrimination.observer`'s module docstring
-#: for the full history). `register_simulated_observer_kind` lets a test
-#: package register its own kind (as an import-time side effect, e.g. in
-#: its own `observer.py`, imported by that package's `__init__.py`) so it
-#: becomes resolvable through the normal `--simulate`/`--simulate-config`
-#: CLI/JSON path like any built-in kind.
-_REGISTERED_SIMULATED_OBSERVER_KINDS: dict[
-    str, Callable[[dict[str, float]], SimulatedObserver]
-] = {}
-
-
-def register_simulated_observer_kind(
-    kind: str, builder: Callable[[dict[str, float]], SimulatedObserver]
-) -> None:
-    """Register a `build_simulated_observer` "kind" extension.
-
-    Args:
-        kind: The `--simulate kind:...`/`{"kind": ...}` name this builder
-            handles, e.g. `"trivector"`. Must not collide with a built-in
-            kind (`"psychometric"`, `"csf"`) or an already-registered one.
-        builder: Called with the parsed `dict[str, float]` params (see
-            `_parse_kv_params`) and must return a constructed
-            `SimulatedObserver`, raising `ValueError` for a missing/invalid
-            parameter -- the same contract `build_simulated_observer`'s
-            built-in kinds follow.
-
-    Raises:
-        ValueError: If `kind` is a built-in kind or already registered.
-    """
-    if kind in ("psychometric", "csf"):
-        raise ValueError(f"Simulated observer kind {kind!r} is a built-in kind, cannot register.")
-    if kind in _REGISTERED_SIMULATED_OBSERVER_KINDS:
-        raise ValueError(f"Simulated observer kind {kind!r} is already registered.")
-    _REGISTERED_SIMULATED_OBSERVER_KINDS[kind] = builder
+#: `build_simulated_observer`'s "kind" registry, beyond the two built in
+#: (`"psychometric"`, `"csf"`) -- see `vpsych.runner.simulated_observer_registry`
+#: for what this is and, importantly, *why it lives in its own module*
+#: rather than here (module-identity under `python -m vpsych.runner`).
+#: Re-exported here under its old name for anything already importing it
+#: from this module.
+register_simulated_observer_kind = _registry.register_simulated_observer_kind
 
 
 def resolve_simulated_observer(name: str) -> SimulatedObserver:
@@ -234,8 +199,8 @@ def build_simulated_observer(kind: str, params: dict[str, float]) -> SimulatedOb
     from vpsych.core.procedures.qcsf import DEFAULT_PSYCHOMETRIC_SLOPE
     from vpsych.core.psychometric import PsychometricFunction
 
-    if kind in _REGISTERED_SIMULATED_OBSERVER_KINDS:
-        return _REGISTERED_SIMULATED_OBSERVER_KINDS[kind](params)
+    if kind in _registry.REGISTERED_SIMULATED_OBSERVER_KINDS:
+        return _registry.REGISTERED_SIMULATED_OBSERVER_KINDS[kind](params)
 
     if kind == "psychometric":
         missing = [k for k in ("threshold", "slope") if k not in params]
@@ -269,7 +234,7 @@ def build_simulated_observer(kind: str, params: dict[str, float]) -> SimulatedOb
             lapse_rate=params.get("lapse", 0.02),
         )
 
-    known = ["psychometric", "csf", *sorted(_REGISTERED_SIMULATED_OBSERVER_KINDS)]
+    known = ["psychometric", "csf", *sorted(_registry.REGISTERED_SIMULATED_OBSERVER_KINDS)]
     raise ValueError(f"Unknown simulated observer kind {kind!r}. Known: {', '.join(known)}.")
 
 
@@ -720,6 +685,8 @@ def run_session(
             final_status = "complete"
             exit_code = RunnerExitCode.OK
             _status(state="finished", n_tests=n_tests, message="Session complete.")
+            if backend.win is not None:
+                backend.show_message("Session complete. Thank you!")
 
         return exit_code
 

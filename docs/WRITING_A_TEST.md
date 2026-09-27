@@ -247,6 +247,23 @@ with this test's configured viewing distance) are available from
   > .make_gamma_ramp` still exists (e.g. for a future non-PsychoPy backend
   > or a manual calibration-verification tool), it is just not wired into
   > `PsychoPyBackend`.
+- **Texture row orientation**: if you build a stimulus as a numpy array and
+  hand it to `psychopy.visual.ImageStim`/`GratingStim(image=...)`,
+  PsychoPy/OpenGL treats row 0 of that array as the *bottom* of the
+  rendered image, not the top. A texture built top-row-first (the natural
+  order for `np.meshgrid`/`np.mgrid` math, e.g. row 0 = the stimulus's top
+  edge) will therefore appear **vertically mirrored** on screen unless you
+  `np.flipud(...)` it right before passing it to `ImageStim`/`image=`. This
+  shipped as a real bug (a Landolt-C gap that rendered on the opposite
+  side from what was scored as correct, across four tests) before being
+  caught and fixed; `visual_acuity`/`vernier_acuity`
+  (`_build_optotype_stim`/`build_stimuli`) and
+  `contrast_sensitivity_function`/`letter_contrast_sensitivity` (their
+  per-frame `image_stim.image = np.flipud(...)` assignments) are the
+  worked examples to copy. Verify any new `ImageStim`-based test with a
+  `@pytest.mark.display` test against a real window (see
+  `tests/tests_catalog/test_texture_orientation.py`), not just headless
+  geometry math -- a headless test cannot catch this class of bug at all.
 - **Bit-stealing dithering**: for contrasts finer than the display's 8-bit
   step (~1/255), dither before drawing:
   `vpsych.core.calibration.dither.dither_to_uint8(intensity_0_to_1, rng)`

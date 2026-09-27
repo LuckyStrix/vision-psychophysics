@@ -12,7 +12,7 @@ any future multi-dimensional observer) was only usable by constructing it
 directly and injecting it via `run_session(..., simulated_observer=...)`,
 bypassing `--simulate`/`--simulate-config` entirely.
 
-That dispatch is now a registry (`vpsych.runner.__main__
+That dispatch is now a registry (`vpsych.runner.simulated_observer_registry
 .register_simulated_observer_kind`); this module registers `"trivector"` as
 an import-time side effect below (mirroring `@register_test`'s own
 import-time registration pattern), so `TrivectorObserver` is resolvable
@@ -33,7 +33,7 @@ from typing import Any
 import numpy as np
 
 from vpsych.core.psychometric import PsychometricFunction
-from vpsych.runner.__main__ import register_simulated_observer_kind
+from vpsych.runner.simulated_observer_registry import register_simulated_observer_kind
 from vpsych.tests_catalog.color_discrimination.discs import RESPONSE_KEYS
 from vpsych.tests_catalog.color_discrimination.procedure import AXES
 

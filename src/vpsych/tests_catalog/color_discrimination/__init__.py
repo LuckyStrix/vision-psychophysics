@@ -127,7 +127,7 @@ from vpsych.tests_catalog.color_discrimination.procedure import AXES, TrivectorP
 # `_observer` (imported, not otherwise used in this module) registers the
 # "trivector" --simulate/--simulate-config observer kind as an import-time
 # side effect -- see observer.py's module docstring and
-# vpsych.runner.__main__.register_simulated_observer_kind.
+# vpsych.runner.simulated_observer_registry.register_simulated_observer_kind.
 
 __all__ = [
     "AXES",

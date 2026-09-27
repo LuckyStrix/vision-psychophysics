@@ -128,9 +128,21 @@ def reanalyze_session(path: str | Path, write: bool = False) -> list[ReanalysisR
         raw_params = planned.params if planned is not None else {}
         params = test_cls.spec.params_model.model_validate(raw_params)
         rng, _ = make_rng(session_info.plan.seed)
-        test_instance = test_cls(
-            params=params, display=session_info.display, calibration=calibration, rng=rng
+        # A test's viewing_distance_cm may differ from the calibration's own geometry (e.g.
+        # near vs. distance acuity in one session -- see PlannedTest.viewing_distance_cm);
+        # run_session builds each test's display this same way (see run_session's own
+        # `.model_copy(update={"viewing_distance_cm": ...})`), and a display-geometry-
+        # dependent test (e.g. contrast_sensitivity_function's Nyquist-bounded frequency
+        # grid) must be reconstructed at the *same* distance or it silently diverges from
+        # the stored summary.
+        display = (
+            session_info.display.model_copy(
+                update={"viewing_distance_cm": planned.viewing_distance_cm}
+            )
+            if planned is not None
+            else session_info.display
         )
+        test_instance = test_cls(params=params, display=display, calibration=calibration, rng=rng)
         new_summary = test_instance.summarize(df)
 
         summary_path = beh_dir / trials_path.name.replace("_trials.tsv", "_summary.json")

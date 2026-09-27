@@ -901,21 +901,8 @@ class CalibrationWizardScreen(QWidget):
         root.addLayout(header_row)
 
         self.stack = QStackedWidget()
-        self._geometry_step = _GeometryStep(self._wizard_state)
-        self._gamma_step = _GammaStep(self._wizard_state)
-        self._color_step = _ColorStep(self._wizard_state)
-        self._environment_step = _EnvironmentStep(self._wizard_state)
-        self._summary_step = _SummaryStep()
-        self._summary_step.save_requested.connect(self._on_save)
-        for step in (
-            self._geometry_step,
-            self._gamma_step,
-            self._color_step,
-            self._environment_step,
-            self._summary_step,
-        ):
-            self.stack.addWidget(step)
         root.addWidget(self.stack, stretch=1)
+        self._build_steps()
 
         nav_row = QHBoxLayout()
         self.back_button = QPushButton("Back")
@@ -933,6 +920,38 @@ class CalibrationWizardScreen(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self._release_photometers)
+
+    def _build_steps(self) -> None:
+        """(Re)build the 5 step widgets, bound to the current `self._wizard_state`.
+
+        Used at construction and again after a save: `CalibrationWizardState.reset()`
+        replaces the state's fields with fresh defaults, but the step widgets (spin
+        boxes, notes text, checkboxes) hold their own Qt-side values independent of
+        that -- only rebuilding the widgets themselves actually shows the reset state,
+        rather than immediately re-committing the previous calibration's stale values
+        on the next "Next" click.
+        """
+        while self.stack.count():
+            widget = self.stack.widget(0)
+            assert widget is not None  # index 0 of a non-empty stack always has a widget
+            self.stack.removeWidget(widget)
+            widget.deleteLater()
+        self._geometry_step = _GeometryStep(self._wizard_state)
+        self._gamma_step = _GammaStep(self._wizard_state)
+        self._color_step = _ColorStep(self._wizard_state)
+        self._environment_step = _EnvironmentStep(self._wizard_state)
+        self._summary_step = _SummaryStep()
+        self._summary_step.save_requested.connect(self._on_save)
+        for step in (
+            self._geometry_step,
+            self._gamma_step,
+            self._color_step,
+            self._environment_step,
+            self._summary_step,
+        ):
+            self.stack.addWidget(step)
+        if hasattr(self, "back_button"):  # not yet built on the very first call from __init__
+            self._update_nav()
 
     def _release_photometers(self) -> None:
         self._gamma_step._release_photometer()
@@ -1041,6 +1060,8 @@ class CalibrationWizardScreen(QWidget):
             return
         save_calibration(calibration, root=self._state.data_root)
         self._wizard_state.reset()
+        self._build_steps()  # widgets must be rebuilt to actually reflect the reset state
+        self._update_nav()
         self._state.refresh_calibration()
         QMessageBox.information(
             self,

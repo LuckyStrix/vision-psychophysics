@@ -18,6 +18,8 @@ section:
 - calibration grade worse than `"A"`, or a stale calibration, is a warning.
 - goodness-of-fit p-value below `alpha` (default 0.05) is a warning.
 - fewer than `min_trials` main-block trials is a warning.
+- more than 10% of attempted main, non-catch trials timing out with no
+  response is a warning (see `check_timeouts`).
 """
 
 from __future__ import annotations
