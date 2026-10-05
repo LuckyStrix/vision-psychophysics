@@ -206,9 +206,10 @@ discarded (without reporting the rate) every run that landed in its
 display-limited regime -- see `docs/methods/critical_flicker_fusion.md`
 "Validation" for the full writeup. Checked here for the same two faults:
 
-- **Grid coverage**: `DEFAULT_SLOPE_VALUES = linspace(0.1, 1.0, 6)` is a
-  fixed, module-level constant (not domain-derived), and comfortably
-  brackets this validation's `slope_true=0.3`.
+- **Grid coverage**: `DEFAULT_SLOPE_VALUES` is a fixed, module-level
+  constant (not domain-derived). *At the time of this cross-check it was
+  `linspace(0.1, 1.0, 6)`, which bracketed `slope_true=0.3`; see the update
+  note below -- it is now `linspace(0.5, 6.0, 6)`.*
 - **Selection bias**: this test's slow validation loop has no
   `display_limited` concept and no `continue`/skip of any kind -- every
   simulated run's bias/coverage is counted (confirmed by inspection of
@@ -225,6 +226,16 @@ validation's true slope and its validation already counts every run
 honestly; the residual bias is the genuine, already-documented
 criterion-amplification/edge effect above, not a coverage or
 selection-bias bug.
+
+**Update (slope grid change).** The second review round (e6b6aaa) changed
+`DEFAULT_SLOPE_VALUES` from `linspace(0.1, 1.0, 6)` to `linspace(0.5, 6.0, 6)`
+(the generic-beta grid used by `visual_acuity`/`vernier_acuity`). The
+measurements above (`slope=0.3`, bias/coverage figures) were taken with the
+old grid and are kept as history; `slope=0.3` is now *outside* the grid, and
+simulating it gave only 0.50-0.60 CI coverage in the weekly validation run.
+The slow test now simulates `slope_true=2.0`, inside the grid, and passes its
+loose bounds (|mean bias| < 0.6, coverage >= 0.75). The bias/coverage table
+has **not** been re-measured for the new grid.
 
 ## Citations
 

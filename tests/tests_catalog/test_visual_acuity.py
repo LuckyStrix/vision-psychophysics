@@ -455,7 +455,7 @@ def test_recovery_slow_bias_and_coverage(true_threshold: float) -> None:
         est = proc.estimate()
         target_p = guess + 0.5 * (1.0 - guess - est.extra["lapse_rate"])
         reported, ci_low, ci_high, _ = test._fract_criterion_threshold(
-            est.value, est.ci_low, est.ci_high, est.extra["slope"], est.extra["lapse_rate"]
+            proc, est, est.extra["lapse_rate"]
         )
         true_at_criterion = questplus_weibull_x_at_p(
             true_threshold, slope_true, guess, lapse_true, target_p

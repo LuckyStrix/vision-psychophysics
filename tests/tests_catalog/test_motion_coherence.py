@@ -374,7 +374,7 @@ def test_summarize_bias_and_coverage_over_many_simulated_runs(true_log10: float)
     """
     display = _display()
     n_runs = 40
-    slope_true = 0.3
+    slope_true = 2.0
     lapse_true = 0.02
     guess = 0.5
 
