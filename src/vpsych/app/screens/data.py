@@ -12,6 +12,7 @@ import importlib
 import webbrowser
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -36,6 +37,8 @@ from vpsych.data import paths
 from vpsych.data.export import export_dataset, export_participant
 from vpsych.data.reanalyze import reanalyze_session
 from vpsych.data.validate import validate_dataset, validate_session
+
+_USER_ROLE = Qt.ItemDataRole.UserRole
 
 
 def _import_session_report() -> Any | None:
@@ -113,14 +116,14 @@ class DataScreen(QWidget):
             return
         for row in self._rows:
             item = QListWidgetItem(f"{row.participant_id}/{row.session_id} ({row.status})")
-            item.setData(0x0100, row)
+            item.setData(_USER_ROLE, row)
             self.session_list.addItem(item)
 
     def _selected_row(self) -> SessionRow | None:
         item = self.session_list.currentItem()
         if item is None:
             return None
-        data = item.data(0x0100)
+        data = item.data(_USER_ROLE)
         return data if isinstance(data, SessionRow) else None
 
     def _on_validate_session(self) -> None:

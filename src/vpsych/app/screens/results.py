@@ -14,6 +14,7 @@ from typing import Any
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
@@ -31,6 +32,8 @@ from vpsych.app.viewmodels.results import build_result_view_model
 from vpsych.app.widgets.badges import SeverityBadge
 from vpsych.data import catalog
 from vpsych.data.schemas import TestSummary
+
+_USER_ROLE = Qt.ItemDataRole.UserRole
 
 
 def _import_reports_figures() -> Any | None:
@@ -112,7 +115,7 @@ class ResultsScreen(QWidget):
             return
         for s in sessions:
             item = QListWidgetItem(f"{s['session_id']} ({s['status']})")
-            item.setData(0x0100, s["session_id"])
+            item.setData(_USER_ROLE, s["session_id"])
             self.session_list.addItem(item)
         self.session_list.setCurrentRow(0)
 
@@ -122,7 +125,7 @@ class ResultsScreen(QWidget):
         if current is None or not self._state.participant_id:
             self._current_session_id = None
             return
-        session_id = current.data(0x0100)
+        session_id = current.data(_USER_ROLE)
         self._current_session_id = session_id
         self._summaries = list_summaries_for_session(
             self._state.participant_id, session_id, self._state.data_root

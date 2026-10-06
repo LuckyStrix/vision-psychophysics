@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -25,6 +25,8 @@ from vpsych.app.state import AppState
 from vpsych.app.viewmodels.calibration import calibration_badge
 from vpsych.app.viewmodels.home import build_recent_sessions, format_participant_label
 from vpsych.data import catalog, dataset
+
+_USER_ROLE = Qt.ItemDataRole.UserRole
 
 
 class NewParticipantDialog(QDialog):
@@ -252,7 +254,7 @@ class HomeScreen(QWidget):
         for row in rows:
             text = f"{row.session_id} — {row.status_text} — {row.started_text} — cal {row.calibration_grade_text}"
             item = QListWidgetItem(text)
-            item.setData(0x0100, row.session_id)  # Qt.ItemDataRole.UserRole
+            item.setData(_USER_ROLE, row.session_id)
             self.recent_sessions_list.addItem(item)
 
     def _refresh_calibration_badge(self) -> None:

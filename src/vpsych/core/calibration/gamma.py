@@ -74,6 +74,10 @@ class GammaChannelModel:
     inverse_lookup: PchipInterpolator | None = None
 
     def __post_init__(self) -> None:
+        if self.lum_max_cdm2 <= self.lum_min_cdm2:
+            raise ValueError("lum_max_cdm2 must be greater than lum_min_cdm2.")
+        if self.gamma is not None and self.gamma <= 0:
+            raise ValueError("gamma must be positive.")
         has_gamma = self.gamma is not None
         has_lookup = self.lookup is not None and self.inverse_lookup is not None
         if has_gamma == has_lookup:
